@@ -1,0 +1,174 @@
+name: Personal macOS build
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CODEXBAR_SUPPRESS_TEST_KEYCHAIN_ACCESS: '1'
+  CODEXBAR_ALLOW_TEST_KEYCHAIN_ACCESS: '0'
+  CODEXBAR_TEST_CODEX_FILE_ISOLATION: '1'
+  CODEXBAR_TEST_SESSION_FILE_ISOLATION: '1'
+
+jobs:
+  check:
+    if: github.repository == 'allgemeiner-intellekt/CodexBar'
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+      - name: Record toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          echo "build=$(xcodebuild -version | tail -1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+      - name: Check
+        run: |
+          mkdir -p logs
+          make check 2>&1 | tee logs/check.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: personal-check-logs
+          path: logs/
+          retention-days: 7
+
+  test:
+    if: github.repository == 'allgemeiner-intellekt/CodexBar'
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+      - name: Record toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          echo "build=$(xcodebuild -version | tail -1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: personal-test-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            personal-test-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-
+      - name: Full tests, shard ${{ matrix.shard }}
+        env:
+          CODEXBAR_TEST_GROUP_SIZE: '4'
+          CODEXBAR_TEST_SUITE_TIMEOUT: '180'
+          CODEXBAR_TEST_RETRY_NON_TIMEOUT_FAILURES: '0'
+          CODEXBAR_TEST_SHARD_INDEX: ${{ matrix.shard }}
+          CODEXBAR_TEST_SHARD_COUNT: '2'
+        run: |
+          mkdir -p logs
+          make test 2>&1 | tee logs/test.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: personal-test-logs-${{ matrix.shard }}
+          path: logs/
+          retention-days: 7
+
+  package:
+    needs: [check, test]
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CODEXBAR_SIGNING: adhoc
+      CODEXBAR_SKIP_LAUNCH_SMOKE: '1'
+      ARCHES: arm64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+      - name: Record toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          echo "build=$(xcodebuild -version | tail -1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: personal-package-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            personal-package-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-
+      - name: Build and verify personal app
+        run: |
+          mkdir -p logs
+          ./Scripts/package_app.sh release 2>&1 | tee logs/package.log
+          python3 Scripts/verify_personal_resources.py 2>&1 | tee logs/resources.log
+          python3 Scripts/prepare_personal_artifact.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: CodexBar-personal-arm64-${{ github.sha }}
+          path: personal-artifact/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: personal-package-logs
+          path: |
+            logs/
+            .build/xcode-widget-extension-release/xcodebuild.log
+          retention-days: 7
