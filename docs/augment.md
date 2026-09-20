@@ -180,4 +180,4 @@ This prevents cookies from other subdomains being sent to the API.
 ## Related Documentation
 
 - [Provider Authoring Guide](provider.md) - How to create new providers
-- [Development Guide](DEVELOPMENT.md) - Build and test instructions
+- [Cloud builds](../.agents/skills/cloud-build/SKILL.md) - Build, test, and artifact retrieval
