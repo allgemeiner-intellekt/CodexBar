@@ -31,6 +31,6 @@ fork 是 `allgemeiner-intellekt/CodexBar`，上游是 `steipete/CodexBar`。自�
 
 ## 验证状态
 
-已有安装记录载明 2026-09-09 的 [run 34343722204](https://github.com/allgemeiner-intellekt/CodexBar/actions/runs/34343722204)，attempt 1，对应提交 `2871ac0a45fe245bef3f2489b8cdfd45e6e117b1`，检查、两路全量测试、打包和产物核验成功，产物为 `0.56.4 (135)`。本次仅保留该构建验证摘要。
+2026-09-22 的 [run 35708094643](https://github.com/allgemeiner-intellekt/CodexBar/actions/runs/35708094643)，attempt 1，对应源码 `8d661b1431cf9ef3dd0de14342719efbec143427`，检查、两路全量测试、打包和产物核验成功。用户授权安装后确认原问题已解决。版本仍为 `0.56.4 (135)`，应以源码 SHA 区分构建。
 
-2026-09-20 重新整理时，通过 GitHub 查询确认该 run 已完成且成功，完整 SHA 和 attempt 与上述记录一致。现有工作流及构建脚本未改动；本次只做文档结构、引用和工作流静态检查，没有重新构建或下载产物。历史成功不表示旧产物仍可下载，也不表示当前供应商功能已经验证。
+产物 hash、安装核验和使用边界见 [本轮实施与安装记录](../../../docs/upstream-issue-3-review-2026-09-22.md#实施与安装结果)。记录表示该次验证结果，不保证历史产物仍可下载，也不替代未来构建的验证。
