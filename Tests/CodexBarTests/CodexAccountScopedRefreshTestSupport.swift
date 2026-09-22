@@ -5,7 +5,7 @@ import Testing
 
 extension CodexAccountScopedRefreshTests {
     func makeSettingsStore(suite: String) -> SettingsStore {
-        let settings = testSettingsStore(suiteName: suite, prepareDefaults: {
+        let settings = testSettingsStore(suiteName: suite, userDefaults: InMemoryUserDefaults(), prepareDefaults: {
             $0.set(true, forKey: "providerDetectionCompleted")
         })
         settings._test_activeManagedCodexAccount = nil
@@ -179,12 +179,18 @@ extension CodexAccountScopedRefreshTests {
                 sourceLabel: "cached")
         }
         let snapshotStore = RecordingCodexAccountUsageSnapshotStore(initialSnapshots: priorSnapshots)
+        let root = CodexCredentialFixtures.root
+        let environment = [
+            "HOME": root.path,
+            "CODEX_HOME": root.appendingPathComponent(".codex", isDirectory: true).path,
+        ]
         let store = UsageStore(
-            fetcher: UsageFetcher(environment: [:]),
-            browserDetection: BrowserDetection(cacheTTL: 0),
+            fetcher: UsageFetcher(environment: environment),
+            browserDetection: BrowserDetection(homeDirectory: root.path, cacheTTL: 0),
             settings: settings,
             codexAccountUsageSnapshotStore: snapshotStore,
-            startupBehavior: .testing)
+            startupBehavior: .testing,
+            environmentBase: environment)
         self.installFailingCodexProvider(
             on: store,
             error: TestRefreshError(message: errorMessage))
