@@ -4,8 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const approvedRootDocumentation = new Set(
-  ["README.md", "CHANGELOG.md", "LICENSE", "VISION.md"].map((relativePath) => path.join(repoRoot, relativePath)),
+const approvedDocumentationFiles = new Set(
+  [
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "VISION.md",
+    ".agents/skills/personal-requirements/SKILL.md",
+    ".agents/skills/cloud-build/SKILL.md",
+  ].map((relativePath) => path.join(repoRoot, relativePath)),
 );
 
 const readme = readText("README.md");
@@ -116,7 +123,7 @@ function localDocPath(rawLink, baseDirectory, sourcePath) {
   const docsRoot = path.resolve(repoRoot, "docs");
   const isInDocsTree = absolutePath === docsRoot || absolutePath.startsWith(`${docsRoot}${path.sep}`);
   assert(
-    isInDocsTree || approvedRootDocumentation.has(absolutePath),
+    isInDocsTree || approvedDocumentationFiles.has(absolutePath),
     `documentation link escapes approved documentation roots: ${rawLink}`,
   );
   return { absolutePath, fragment: parsed.hash ? decodeURIComponent(parsed.hash.slice(1)) : "" };

@@ -1,9 +1,18 @@
 import Foundation
+import SweetCookieKit
 
 public enum KimiProviderDescriptor {
     public static let sessionWindowMinutes = 5 * 60
     public static let weeklyWindowMinutes = 7 * 24 * 60
     public static let descriptor: ProviderDescriptor = Self.makeDescriptor()
+    private static var browserCookieOrder: BrowserCookieImportOrder? {
+        #if os(macOS)
+        [.chrome]
+        #else
+        nil
+        #endif
+    }
+
     private static let credentials = ProviderCredentialAdapter(
         supportsAPIKeyOverride: true,
         environmentProjections: [
@@ -52,7 +61,7 @@ public enum KimiProviderDescriptor {
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
                 debugLogUnavailableMessage: "Kimi debug log not yet implemented",
-                browserCookieOrder: nil,
+                browserCookieOrder: self.browserCookieOrder,
                 dashboardURL: "https://www.kimi.com/code/console",
                 statusPageURL: nil),
             branding: ProviderBranding(
@@ -114,8 +123,9 @@ public enum KimiProviderDescriptor {
         context: ProviderMenuBarWindowContext) -> ProviderMenuBarWindowResolution
     {
         guard context.metric == .automatic else { return .unhandled }
+        let monthly = context.snapshot.extraRateWindows?.first { $0.id == "kimi-monthly" && $0.usageKnown }?.window
         return .resolved(
-            ProviderUsagePresentation.exhausted(context.snapshot.primary, context.snapshot.secondary)
+            ProviderUsagePresentation.exhausted(monthly, context.snapshot.primary, context.snapshot.secondary)
                 ?? context.snapshot.secondary
                 ?? context.snapshot.primary)
     }
@@ -241,6 +251,7 @@ enum KimiWebEnrichmentTokenResolver {
         if let override = KimiCookieHeader.resolveCookieOverride(context: context) {
             return override.token
         }
+        guard KimiBrowserImportPolicy.allowsImport(context) else { return nil }
         #if os(macOS)
         if let token = KimiCookieImporter.desktopAuthToken() {
             return token
@@ -284,7 +295,33 @@ private enum KimiCodeAPIFallbackPolicy {
 struct KimiWebFetchStrategy: ProviderFetchStrategy {
     let id: String = "kimi.web"
     let kind: ProviderFetchKind = .web
-    private static let log = CodexBarLog.logger(LogCategories.provider(.kimi, scope: "web"))
+    private let fetchUsage: @Sendable (String) async throws -> KimiUsageSnapshot
+    private let desktopToken: @Sendable () -> String?
+    private let browserTokens: @Sendable () -> [String]
+
+    init(
+        fetchUsage: @escaping @Sendable (String) async throws -> KimiUsageSnapshot = {
+            try await KimiUsageFetcher.fetchUsage(authToken: $0)
+        },
+        desktopToken: @escaping @Sendable () -> String? = {
+            #if os(macOS)
+            KimiCookieImporter.desktopAuthToken()
+            #else
+            nil
+            #endif
+        },
+        browserTokens: @escaping @Sendable () -> [String] = {
+            #if os(macOS)
+            (try? KimiCookieImporter.importSessions().compactMap(\.authToken)) ?? []
+            #else
+            []
+            #endif
+        })
+    {
+        self.fetchUsage = fetchUsage
+        self.desktopToken = desktopToken
+        self.browserTokens = browserTokens
+    }
 
     func isAvailable(_ context: ProviderFetchContext) async -> Bool {
         if KimiCookieHeader.resolveCookieOverride(context: context) != nil {
@@ -295,27 +332,65 @@ struct KimiWebFetchStrategy: ProviderFetchStrategy {
             return true
         }
 
-        #if os(macOS)
         if KimiBrowserImportPolicy.allowsImport(context) {
-            if KimiCookieImporter.desktopAuthToken() != nil {
-                return true
-            }
-            return KimiCookieImporter.hasSession()
+            return self.desktopToken() != nil || !self.browserTokens().isEmpty
         }
-        #endif
 
         return false
     }
 
     func fetch(_ context: ProviderFetchContext) async throws -> ProviderFetchResult {
-        guard let token = self.resolveToken(context: context) else {
-            throw KimiAPIError.missingToken
+        try Task.checkCancellation()
+        // Explicit overrides stay authoritative; automatic sources may fall through on invalid credentials.
+        if let override = KimiCookieHeader.resolveCookieOverride(context: context) {
+            let snapshot = try await self.fetchUsage(override.token)
+            return self.makeResult(usage: snapshot.toUsageSnapshot(), sourceLabel: "Kimi web cookie")
         }
+        var desktopToken: String?
+        if KimiBrowserImportPolicy.allowsImport(context) {
+            desktopToken = self.desktopToken()
+        }
+        let snapshot = try await Self.fetchWithFallback(
+            desktopToken: desktopToken,
+            browserTokens: {
+                if KimiBrowserImportPolicy.allowsImport(context) {
+                    return self.browserTokens()
+                }
+                return []
+            },
+            environmentToken: Self.resolveToken(environment: context.env),
+            fetchUsage: self.fetchUsage)
+        return self.makeResult(usage: snapshot.toUsageSnapshot(), sourceLabel: "Kimi web cookie")
+    }
 
-        let snapshot = try await KimiUsageFetcher.fetchUsage(authToken: token)
-        return self.makeResult(
-            usage: snapshot.toUsageSnapshot(),
-            sourceLabel: "Kimi web cookie")
+    static func fetchWithFallback(
+        desktopToken: String?,
+        browserTokens: () -> [String],
+        environmentToken: String?,
+        fetchUsage: (String) async throws -> KimiUsageSnapshot) async throws -> KimiUsageSnapshot
+    {
+        try Task.checkCancellation()
+        var seen = Set<String>()
+        var invalidToken = false
+        if let desktopToken {
+            seen.insert(desktopToken)
+            do {
+                return try await fetchUsage(desktopToken)
+            } catch KimiAPIError.invalidToken {
+                invalidToken = true
+            }
+        }
+        try Task.checkCancellation()
+        for token in browserTokens() + [environmentToken].compactMap(\.self) where seen.insert(token).inserted {
+            try Task.checkCancellation()
+            do {
+                return try await fetchUsage(token)
+            } catch KimiAPIError.invalidToken {
+                invalidToken = true
+            }
+        }
+        try Task.checkCancellation()
+        throw invalidToken ? KimiAPIError.invalidToken : KimiAPIError.missingToken
     }
 
     func shouldFallback(on error: Error, context: ProviderFetchContext) -> Bool {
@@ -328,36 +403,6 @@ struct KimiWebFetchStrategy: ProviderFetchStrategy {
         return true
     }
 
-    private func resolveToken(context: ProviderFetchContext) -> String? {
-        // Check manual cookie first (highest priority when set)
-        if let override = KimiCookieHeader.resolveCookieOverride(context: context) {
-            return override.token
-        }
-
-        // Try browser cookie import when auto mode is enabled
-        #if os(macOS)
-        if KimiBrowserImportPolicy.allowsImport(context) {
-            if let token = KimiCookieImporter.desktopAuthToken() {
-                return token
-            }
-            do {
-                let session = try KimiCookieImporter.importSession()
-                if let token = session.authToken {
-                    return token
-                }
-            } catch {
-                // No browser cookies found
-            }
-        }
-        #endif
-
-        // Fall back to environment
-        if let override = Self.resolveToken(environment: context.env) {
-            return override
-        }
-        return nil
-    }
-
     private static func resolveToken(environment: [String: String]) -> String? {
         ProviderTokenResolver.token(for: .kimi, environment: environment)
     }
@@ -365,6 +410,6 @@ struct KimiWebFetchStrategy: ProviderFetchStrategy {
 
 enum KimiBrowserImportPolicy {
     static func allowsImport(_ context: ProviderFetchContext) -> Bool {
-        context.settings?.kimi?.cookieSource != .off
+        (context.settings?.kimi?.cookieSource ?? .auto) == .auto
     }
 }

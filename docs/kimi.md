@@ -60,19 +60,21 @@ reuse; use an explicit API key for endpoint-override testing.
 
 ### Method 3: Automatic Browser Import
 
-**No setup needed!** If you're already logged in to Kimi in Arc, Chrome, Safari, Edge, Brave, or Chromium:
+This personal fork uses Chrome for automatic browser import. If you're already logged in to Kimi in Chrome:
 
 1. Open CodexBar settings → Providers → Kimi
 2. Set "Cookie source" to "Automatic"
 3. Enable the Kimi provider toggle
 4. CodexBar will automatically find your session
 
-**Note**: Requires Full Disk Access to read browser cookies (System Settings → Privacy & Security → Full Disk Access → CodexBar).
+Browser cookie access follows the existing macOS permission and Keychain access policy. If automatic access is unavailable, use a manual token.
 
 Automatic mode also checks the official Kimi Desktop app before importing browser cookies. Its Chromium
 Cookies database is opened read-only: active WAL databases use SQLite's normal WAL-aware path, while idle
 WAL-mode databases with no sidecars use an immutable read-only fallback. CodexBar never creates or modifies
 Kimi Desktop database files.
+
+Expired Desktop JWTs are ignored. If the server rejects an automatic Desktop session, CodexBar tries distinct Chrome sessions. Network failures do not switch sessions, and cancellation stops further discovery. A rejected explicit token is reported without switching to another session.
 
 ### Method 4: Manual Token Entry
 
@@ -103,16 +105,24 @@ When multiple sources are available, CodexBar uses this order:
 3. Manual cookie/token (from Settings UI) when web fallback is used
 4. Cookie environment variable (`KIMI_AUTH_TOKEN`)
 5. Kimi Desktop `kimi-auth` cookie
-6. Browser cookies (Arc → Chrome → Safari → Edge → Brave → Chromium)
+6. Chrome cookies
 
 For Code API and CLI results, sources 3–6 are best-effort enrichment only: the required Code usage remains
 available if the membership request fails. Setting **Cookie source** to **Off** disables this enrichment and
 does not inspect Kimi Desktop or browser cookies.
 
-**Note**: Browser cookie import requires Full Disk Access permission.
-
 Setting **Cookie source** to **Off** prevents browser import on every Kimi path. Context-free token resolution is
 limited to explicit environment values; only the provider's settings-aware web strategy may inspect browsers.
+
+Setting **Cookie source** to **Manual** also prevents automatic Desktop and browser discovery when the manual value is empty or invalid, including optional Code API enrichment.
+
+## Quota windows
+
+The Code API parser accepts both legacy count fields and `usages` ratio pools for `limit_5h`, `limit_7d`, and `limit_month_total`. Missing windows remain absent. Monthly Total usage uses the shared subscription pool, not the Code-only split.
+
+For mixed legacy responses without a monthly ratio pool, a zero ratio can be a placeholder. Reliable nonzero counts take precedence only when the window duration matches and reset times differ by no more than two seconds. Nonzero ratios, monthly-pool responses, and different quota periods retain their existing precedence.
+
+When a measured monthly quota is exhausted, Automatic menu-bar selection and highest-usage ranking use that quota. Explicit window selections are unchanged.
 
 ## API Details
 

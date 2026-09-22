@@ -1519,7 +1519,7 @@ extension UsageStore {
     }
 
     nonisolated static func isPreservableNetworkTransportError(_ error: Error) -> Bool {
-        let nsError = error as NSError
+        let nsError = self.underlyingCodexTransportError(error) as NSError
         guard nsError.domain == NSURLErrorDomain else { return false }
         switch nsError.code {
         case NSURLErrorTimedOut,
@@ -1542,11 +1542,13 @@ extension UsageStore {
     }
 
     static func isStartupConnectivityRetryableError(_ error: Error) -> Bool {
-        if error is CancellationError {
+        guard !self.isCodexNonTransportError(error) else { return false }
+        let transportError = self.underlyingCodexTransportError(error)
+        if transportError is CancellationError {
             return false
         }
 
-        let nsError = error as NSError
+        let nsError = transportError as NSError
         if nsError.domain == NSURLErrorDomain {
             switch nsError.code {
             case NSURLErrorTimedOut,
@@ -1592,6 +1594,7 @@ extension UsageStore {
     }
 
     nonisolated static func isPermissionPromptWaiting(_ error: Error) -> Bool {
+        guard !self.isCodexNonTransportError(error) else { return false }
         let message = error.localizedDescription.lowercased()
         return (message.contains("prompt") && message.contains("waiting")) ||
             message.contains("permission prompt") ||

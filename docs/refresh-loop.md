@@ -23,6 +23,18 @@ read_when:
   background, coalesced/throttled during automatic refreshes, and forced by manual refresh without blocking the usage
   refresh path.
 
+## Failed refreshes
+
+- Recognized transient transport failures retain the last valid account measurement, source, and original timestamp.
+  Retained measurements do not create new usage-history samples.
+- Token-account cache reuse requires a unique account and a matching credential/configuration cache key. Codex retains
+  its existing account/workspace ownership checks across credential rotation. Removed accounts, changed ownership, and
+  superseded refreshes cannot publish another account's cached data.
+- Codex OAuth and refresh wrappers are unwrapped for network retention, startup retries, and cancellation handling.
+  Cancellation does not advance failure accounting. Explicit HTTP, authentication, and invalid-response errors take
+  precedence over legacy text matching, including response bodies containing “timeout” or “cancelled”.
+- HTTP 401 retains Codex authentication recovery. HTTP 403 remains a permission failure and does not launch CLI recovery.
+
 ## Adaptive mode
 - `AdaptiveRefreshPolicy` (`Sources/CodexBar/AdaptiveRefreshPolicy.swift`) is a pure function of an `Input`
   (current time, last menu-open time, latest local coding-activity time, Low Power Mode, thermal state) that returns

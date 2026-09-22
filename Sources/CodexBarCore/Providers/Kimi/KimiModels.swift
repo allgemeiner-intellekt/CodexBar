@@ -5,8 +5,40 @@ struct KimiUsageResponse: Codable {
 }
 
 struct KimiCodeAPIUsageResponse: Codable {
-    let usage: KimiUsageDetail
+    let usage: KimiUsageDetail?
+    let usages: KimiCodeUsagePools?
     let limits: [KimiRateLimit]?
+}
+
+struct KimiCodeUsagePools: Codable, Sendable {
+    let session: KimiRatioPool?
+    let weekly: KimiRatioPool?
+    let monthly: KimiRatioPool?
+
+    private enum CodingKeys: String, CodingKey {
+        case session = "limit_5h"
+        case weekly = "limit_7d"
+        case monthly = "limit_month_total"
+    }
+}
+
+struct KimiRatioPool: Codable, Sendable {
+    let usedRatio: Double?
+    let resetTime: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case usedRatio = "used_ratio"
+        case resetTime = "reset_time"
+    }
+
+    func window(minutes: Int) -> RateWindow? {
+        guard let usedRatio, usedRatio.isFinite, usedRatio >= 0 else { return nil }
+        return RateWindow(
+            usedPercent: min(1, usedRatio) * 100,
+            windowMinutes: minutes,
+            resetsAt: KimiUsageSnapshot.parseDate(self.resetTime),
+            resetDescription: nil)
+    }
 }
 
 struct KimiSubscriptionStatsResponse: Codable {
@@ -96,11 +128,8 @@ public struct KimiUsageDetail: Codable, Sendable {
             return String(value)
         }
         if let value = try? container.decode(Double.self, forKey: key) {
-            if value.rounded(.towardZero) == value,
-               value >= Double(Int64.min),
-               value <= Double(Int64.max)
-            {
-                return String(Int64(value))
+            if let integer = Int64(exactly: value) {
+                return String(integer)
             }
             return String(value)
         }

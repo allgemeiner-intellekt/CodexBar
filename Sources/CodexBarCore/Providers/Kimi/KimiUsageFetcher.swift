@@ -212,18 +212,27 @@ public struct KimiUsageFetcher: Sendable {
             rateLimitWindow: snapshot.rateLimitWindow,
             subscriptionBalance: subscriptionStats.subscriptionBalance,
             subscriptionCodeWeeklyLimit: subscriptionStats.ratelimitCode7d,
+            codeUsagePools: snapshot.codeUsagePools,
             updatedAt: now)
     }
 
     private static func parseCodeAPIUsage(from data: Data, now: Date) throws -> KimiUsageSnapshot {
         let response = try JSONDecoder().decode(KimiCodeAPIUsageResponse.self, from: data)
         let rateLimit = response.limits?.first
-        return KimiUsageSnapshot(
+        let snapshot = KimiUsageSnapshot(
             weekly: response.usage,
             rateLimit: rateLimit?.detail,
             rateLimitWindow: rateLimit?.window,
             subscriptionBalance: nil,
+            codeUsagePools: response.usages,
             updatedAt: now)
+        let usage = snapshot.toUsageSnapshot()
+        guard usage.primary != nil || usage.secondary != nil || usage.extraRateWindows?.isEmpty == false else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "No supported quota windows in Code usage response"))
+        }
+        return snapshot
     }
 
     private static func codeAPIUsageEndpoint(baseURL: URL) -> URL {

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Kimi: accept ratio-based Code API quotas, reconcile zero placeholders with matching counts, and safely decode oversized numbers. Show an exhausted monthly quota in Automatic menu-bar mode.
+- Kimi: recover rejected automatic Desktop sessions through Chrome while respecting Manual and Off cookie settings. Explicit tokens remain authoritative.
+- Codex: preserve valid account measurements and their timestamps during transient network failures. Recognize wrapped transport cancellations, and keep HTTP permission errors separate from authentication recovery and text-based network fallbacks.
+
 ## 0.56.4 — 2026-09-03
 
 ### Fixed
