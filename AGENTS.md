@@ -25,8 +25,8 @@
 - Add/extend XCTest cases under `Tests/CodexBarTests/*Tests.swift` (`FeatureNameTests` with `test_caseDescription` methods).
 - Swift Testing: prefer backticked sentence names; no camelCase.
 - Model names in tests/code: released models or clearly fictitious names only; never expose unreleased names.
-- Cover changed behavior with focused tests; use the cloud workflow for execution, including full `make test` and packaging. Record the source SHA and remote result before installation. Documentation/workflow preparation needs static validation only.
-- After code changes, use the remote `make check` job; require it to pass before installation. Fix issues in changed code; report unrelated baseline failures.
+- Cover changed behavior with focused tests; complete cloud tests and checks during PR work. When the user explicitly requests an update based on a PR, reuse its completed validation and follow the build-only path in `.agents/skills/cloud-build/SKILL.md`. Record the source SHA and remote results before installation. Documentation/workflow preparation needs static validation only.
+- After code changes, require successful remote checks before installation; PR validation reuse follows the rule above. Fix issues in changed code; report unrelated baseline failures.
 - Prefer CLI/focused tests over app-bundle live tests when behavior can be verified without relaunching CodexBar.
 - Never run tests/checks or ad-hoc validation that can display macOS Keychain prompts. Live provider probes, browser-cookie imports, `codexbar usage` against real accounts, and real SecItem reads must be explicitly requested; otherwise use parser tests, stubs, test stores, or `KeychainNoUIQuery`.
 - App-group migration tests must inject dictionary-backed defaults, both snapshot URLs, a synthetic home, and a contained recording FileManager. UUID defaults suites and Keychain isolation flags do not isolate defaults search domains or filesystem access. Ordinary SettingsStore tests must not discover shared defaults or run app-group migration.

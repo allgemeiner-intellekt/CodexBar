@@ -2,6 +2,16 @@ name: Personal macOS build
 
 on:
   workflow_dispatch:
+    inputs:
+      run_validation:
+        description: Run tests and checks (disable when reusing successful PR validation)
+        type: boolean
+        default: true
+        required: true
+      source_ref:
+        description: Source commit to build (defaults to the selected workflow branch)
+        type: string
+        required: false
 
 defaults:
   run:
@@ -22,13 +32,14 @@ env:
 
 jobs:
   check:
-    if: github.repository == 'allgemeiner-intellekt/CodexBar'
+    if: github.repository == 'allgemeiner-intellekt/CodexBar' && inputs.run_validation
     runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+          ref: ${{ inputs.source_ref || github.sha }}
       - name: Select Xcode
         shell: bash
         run: |
@@ -59,7 +70,7 @@ jobs:
           retention-days: 7
 
   test:
-    if: github.repository == 'allgemeiner-intellekt/CodexBar'
+    if: github.repository == 'allgemeiner-intellekt/CodexBar' && inputs.run_validation
     runs-on: macos-26
     timeout-minutes: 60
     strategy:
@@ -70,6 +81,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+          ref: ${{ inputs.source_ref || github.sha }}
       - name: Select Xcode
         shell: bash
         run: |
@@ -115,6 +127,10 @@ jobs:
 
   package:
     needs: [check, test]
+    if: >-
+      ${{ always() && !cancelled() && github.repository == 'allgemeiner-intellekt/CodexBar' &&
+          ((inputs.run_validation && needs.check.result == 'success' && needs.test.result == 'success') ||
+           (!inputs.run_validation && needs.check.result == 'skipped' && needs.test.result == 'skipped')) }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -125,6 +141,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+          ref: ${{ inputs.source_ref || github.sha }}
       - name: Select Xcode
         shell: bash
         run: |
@@ -142,13 +159,14 @@ jobs:
           set -euo pipefail
           xcodebuild -version
           swift --version
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "build=$(xcodebuild -version | tail -1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             .build
             ~/Library/Caches/org.swift.swiftpm
-          key: personal-package-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-${{ github.sha }}
+          key: personal-package-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-${{ steps.toolchain.outputs.source_sha }}
           restore-keys: |
             personal-package-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-
       - name: Build and verify personal app
@@ -159,7 +177,7 @@ jobs:
           python3 Scripts/prepare_personal_artifact.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: CodexBar-personal-arm64-${{ github.sha }}
+          name: CodexBar-personal-arm64-${{ steps.toolchain.outputs.source_sha }}
           path: personal-artifact/
           if-no-files-found: error
           retention-days: 7

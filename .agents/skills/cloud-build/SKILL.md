@@ -11,19 +11,26 @@ description: CodexBar 需要编译、测试、检查、打包或获取构建产�
 
 fork 是 `allgemeiner-intellekt/CodexBar`，上游是 `steipete/CodexBar`。自用工作流、产物和运行查询均针对 fork。
 
+## PR 验证与按 PR 更新
+
+- PR 工作阶段完成测试和检查，记录验证对应的源码版本与运行链接。
+- 用户明确要求根据 PR 更新本地应用时，复用该 PR 已完成的成功验证。更新阶段只执行 release 构建、打包、资源与产物核验，不重复运行测试或源码检查。
+- 确认验证覆盖 PR 最终源码及安装目标。合并提交 SHA 可以不同；Git tree 相同可复用。记录 PR 编号、验证运行链接、验证源码和构建源码的完整 SHA。核对实际测试和检查任务成功，不能仅凭 PR 已合并或汇总为绿判断。
+- 验证失败、缺失或合并引入源码变化时，说明未覆盖的部分，由用户决定补充验证或调整更新目标；不自动转为整套重新验证。
+
 ## 构建与下载
 
-默认使用 `.github/workflows/personal-macos.yml`，手动触发，macOS arm64 runner。检查和两路完整测试均成功后才打包，产物保留 7 天，失败上传日志。工作流不发布 Release、不推送代码、不使用个人账户凭据。
+使用 `.github/workflows/personal-macos.yml`，手动触发，macOS arm64 runner。默认执行检查、两路完整测试和打包；按 PR 更新时传入 `run_validation=false`，复用上述验证并只构建打包。产物保留 7 天，失败上传日志。工作流不发布 Release、不推送代码、不使用个人账户凭据。
 
 1. 明确本次源版本。Actions 只构建已提交并推送的版本，未提交修改不会自动上传；将需要的本地修改纳入版本后，按用户授权提交和推送。工作流首次使用须先进入 fork 的默认分支 `main`。仅准备流程不代表已经推送或远端验证成功。
-2. 所有 `gh` 命令显式指定 `--repo allgemeiner-intellekt/CodexBar`，本机 `gh` 的默认仓库可能是上游。用 `gh workflow run personal-macos.yml --repo allgemeiner-intellekt/CodexBar --ref BRANCH` 触发所选分支。用 `gh run list --repo allgemeiner-intellekt/CodexBar --workflow personal-macos.yml --branch BRANCH --json databaseId,headSha,status,conclusion,url` 查询运行，匹配分支及预期完整 head SHA，记录 run ID；不要直接采用“最近一次”运行。
-3. 用 `gh run view RUN_ID --repo allgemeiner-intellekt/CodexBar` 查看所选运行结果，等待其成功。下载 `CodexBar-personal-arm64-SHA` 产物到全新目录，例如 `gh run download RUN_ID --repo allgemeiner-intellekt/CodexBar --name CodexBar-personal-arm64-SHA --dir DESTINATION`。占位符替换为已核对值。失败时读取对应日志，不跳过测试或取失败运行的包安装。
+2. 所有 `gh` 命令显式指定 `--repo allgemeiner-intellekt/CodexBar`，本机 `gh` 的默认仓库可能是上游。用 `gh workflow run personal-macos.yml --repo allgemeiner-intellekt/CodexBar --ref BRANCH` 触发所选分支；按 PR 更新时加 `-f run_validation=false`。若构建工作流位于另一分支，加 `-f source_ref=SOURCE_SHA` 固定已验证源码；此时运行 head SHA 表示工作流版本，产物名和 manifest commit 表示构建源码，分别核对。用 `gh run list --repo allgemeiner-intellekt/CodexBar --workflow personal-macos.yml --branch BRANCH --json databaseId,headSha,status,conclusion,url` 查询运行，匹配分支及预期完整 head SHA，记录 run ID；不要直接采用“最近一次”运行。
+3. 用 `gh run view RUN_ID --repo allgemeiner-intellekt/CodexBar` 查看所选运行结果，成功后下载 `CodexBar-personal-arm64-SHA` 产物到全新目录，例如 `gh run download RUN_ID --repo allgemeiner-intellekt/CodexBar --name CodexBar-personal-arm64-SHA --dir DESTINATION`。占位符替换为已核对值。失败时读取对应日志，不取失败运行的包安装。遵循用户对监控的要求；启动运行不代表需要持续轮询。
 4. 在下载目录运行 `shasum -a 256 -c SHA256SUMS`。检查 `build.json` 的完整 commit、run URL、attempt 与所选成功运行一致。用 `ditto -x -k CodexBar-personal-arm64.zip STAGING` 解压，再验证 `codesign --verify --deep --strict STAGING/CodexBar.app`。
 5. 核对解压后主程序 SHA-256 与 manifest 一致，Info.plist 的版本、提交、构建时间及应用身份一致，官方更新源为空且自动检查关闭。保留下载来源和校验结果。下载包可能带有隔离属性；遇到 Gatekeeper 提示如实报告并由用户处理，不自动删除隔离属性。
 
 ## 入口与产物限制
 
-- 工作流入口：[Personal macOS build](https://github.com/allgemeiner-intellekt/CodexBar/actions/workflows/personal-macos.yml)。本仓库的 [personal-macos.yml](../../../.github/workflows/personal-macos.yml) 维护检查、测试、打包命令及参数，当前一次运行包括全部任务。
+- 工作流入口：[Personal macOS build](https://github.com/allgemeiner-intellekt/CodexBar/actions/workflows/personal-macos.yml)。本仓库的 [personal-macos.yml](../../../.github/workflows/personal-macos.yml) 维护检查、测试、打包命令及参数，`run_validation` 选择完整验证或复用 PR 验证。
 - [prepare_personal_artifact.py](../../../Scripts/prepare_personal_artifact.py) 生成 zip、`SHA256SUMS` 和 `build.json`，检查源码、应用身份、更新设置、架构和签名。[verify_personal_resources.py](../../../Scripts/verify_personal_resources.py) 执行隔离资源验证。
 - 分发入口为所选成功运行页面的 Artifacts，面向用户 Apple Silicon Mac，产物为 arm64 release 临时签名应用。产物到期后需重新构建；本流程不创建公开 Release。
 - 沿用 `com.steipete.codexbar` 与设置位置，关闭官方自动更新，iCloud 同步不可用。临时签名不提供原作者的签名身份；权限和 widget 可用性按运行验证结果报告。
