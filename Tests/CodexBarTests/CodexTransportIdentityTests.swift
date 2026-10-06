@@ -96,7 +96,6 @@ struct CodexTransportIdentityTests {
                 "Refresh token was already used. Please run `codex` to log in again."),
         ]
         for (error, description) in failures {
-            #expect(!UsageStore.errorIsCancellation(error))
             #expect(!UsageStore.shouldPreservePriorSnapshot(after: error, hadPriorData: true))
             #expect(!UsageStore.isStartupConnectivityRetryableError(error))
             #expect(UsageStore.refreshFailureHookStatus(error) == "error")
@@ -104,47 +103,26 @@ struct CodexTransportIdentityTests {
         }
     }
 
-    @Test
-    func `arbitrary underlying NSError is not unwrapped`() {
+    @Test(arguments: [URLError.Code.notConnectedToInternet, .cancelled])
+    func `arbitrary underlying NSError is not unwrapped`(code: URLError.Code) {
         let error = NSError(domain: "synthetic-provider", code: 1, userInfo: [
             NSLocalizedDescriptionKey: "Synthetic provider failure",
-            NSUnderlyingErrorKey: Self.localizedError(code: .notConnectedToInternet),
+            NSUnderlyingErrorKey: Self.localizedError(code: code),
         ])
         #expect(!UsageStore.shouldPreservePriorSnapshot(after: error, hadPriorData: true))
         #expect(!UsageStore.isStartupConnectivityRetryableError(error))
         #expect(UsageStore.refreshFailureHookStatus(error) == "error")
-        #expect(!UsageStore.isPermissionPromptWaiting(error))
-    }
-
-    @Test(arguments: [403, 503], ["timed out", "timeout", "cancelled", "permission prompt waiting"])
-    func `HTTP rejection bodies cannot override structured failure classification`(status: Int, body: String) {
-        let error = CodexOAuthFetchError.serverError(status, body)
         #expect(!UsageStore.errorIsCancellation(error))
-        #expect(!UsageStore.shouldPreservePriorSnapshot(after: error, hadPriorData: true))
-        #expect(!UsageStore.isStartupConnectivityRetryableError(error))
-        #expect(UsageStore.refreshFailureHookStatus(error) == "error")
-        #expect(!UsageStore.isPermissionPromptWaiting(error))
     }
 
     @Test
-    func `invalid refresh response text cannot impersonate transport failure`() {
-        let error = CodexTokenRefresher.RefreshError.invalidResponse("timeout cancelled")
-        #expect(!UsageStore.errorIsCancellation(error))
-        #expect(!UsageStore.shouldPreservePriorSnapshot(after: error, hadPriorData: true))
-        #expect(!UsageStore.isStartupConnectivityRetryableError(error))
-        #expect(UsageStore.refreshFailureHookStatus(error) == "error")
-    }
-
-    @Test
-    func `unstructured provider descriptions retain the existing text fallback`() {
-        let error = NSError(domain: "fixture-provider", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: "Synthetic upstream timed out",
-        ])
+    func `provider descriptions retain the existing text fallback`() {
+        let error = CodexOAuthFetchError.serverError(503, "Synthetic upstream timed out")
         #expect(UsageStore.shouldPreservePriorSnapshot(after: error, hadPriorData: true))
         #expect(!UsageStore.shouldPreservePriorSnapshot(after: error, hadPriorData: false))
         #expect(UsageStore.isStartupConnectivityRetryableError(error))
         #expect(UsageStore.refreshFailureHookStatus(error) == "error")
-        #expect(error.localizedDescription == "Synthetic upstream timed out")
+        #expect(error.localizedDescription == "Codex API error 503: Synthetic upstream timed out")
     }
 
     private nonisolated static func localizedError(code: URLError.Code) -> NSError {

@@ -2,28 +2,12 @@ import AppKit
 import CodexBarCore
 import Foundation
 
-protocol ManagedCodexHomeProducing: Sendable {
-    func makeHomeURL() -> URL
-    func validateManagedHomeForDeletion(_ url: URL) throws
-}
-
 protocol ManagedCodexLoginRunning: Sendable {
-    func run(homePath: String, timeout: TimeInterval) async -> CodexLoginRunner.Result
+    func run(homePath: String, timeout: TimeInterval) async -> CLILoginRunner.Result
 }
 
 protocol ManagedCodexIdentityReading: Sendable {
     func loadAccountIdentity(homePath: String) throws -> CodexAuthBackedAccount
-}
-
-protocol ManagedCodexWorkspaceResolving: Sendable {
-    func resolveWorkspaceIdentity(homePath: String, providerAccountID: String) async -> CodexOpenAIWorkspaceIdentity?
-    func availableWorkspaceIdentities(homePath: String) async -> [CodexOpenAIWorkspaceIdentity]
-}
-
-extension ManagedCodexWorkspaceResolving {
-    func availableWorkspaceIdentities(homePath _: String) async -> [CodexOpenAIWorkspaceIdentity] {
-        []
-    }
 }
 
 protocol ManagedCodexWorkspaceSelecting: Sendable {
@@ -35,7 +19,7 @@ protocol ManagedCodexWorkspaceSelecting: Sendable {
 }
 
 enum ManagedCodexAccountServiceError: Error, Equatable {
-    case loginFailed(CodexLoginRunner.Result)
+    case loginFailed(CLILoginRunner.Result)
     case missingEmail
     case workspaceSelectionCancelled
     case unsafeManagedHome(String)
@@ -92,7 +76,7 @@ struct ManagedCodexHomeFactory: ManagedCodexHomeProducing {
 }
 
 struct DefaultManagedCodexLoginRunner: ManagedCodexLoginRunning {
-    func run(homePath: String, timeout: TimeInterval) async -> CodexLoginRunner.Result {
+    func run(homePath: String, timeout: TimeInterval) async -> CLILoginRunner.Result {
         await CodexLoginRunner.run(homePath: homePath, timeout: timeout)
     }
 }
@@ -239,7 +223,6 @@ final class ManagedCodexAccountService {
         timeout: TimeInterval = 120)
         async throws -> ManagedCodexAccount
     {
-        let snapshot = try self.store.loadAccounts()
         let homeURL = self.homeFactory.makeHomeURL()
         try self.fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
         let account: ManagedCodexAccount
@@ -275,55 +258,70 @@ final class ManagedCodexAccountService {
             }
 
             let now = Date().timeIntervalSince1970
-            let existing = self.reconciledExistingAccount(
-                authenticatedEmail: rawEmail,
-                providerAccountID: providerAccountID,
-                existingAccountID: existingAccountID,
-                snapshot: snapshot)
-            let persistedMetadata = self.persistedProviderMetadata(
-                authenticatedProviderAccountID: providerAccountID,
-                resolvedWorkspaceIdentity: workspaceIdentity,
-                existingAccount: existing)
+            let committed = try ManagedCodexAccountLock.withLock(at: self.store.lockURL) {
+                let snapshot = try self.store.loadAccounts()
+                let existing = self.reconciledExistingAccount(
+                    authenticatedEmail: rawEmail,
+                    providerAccountID: providerAccountID,
+                    existingAccountID: existingAccountID,
+                    snapshot: snapshot)
+                let persistedMetadata = self.persistedProviderMetadata(
+                    authenticatedProviderAccountID: providerAccountID,
+                    resolvedWorkspaceIdentity: workspaceIdentity,
+                    existingAccount: existing)
 
-            account = ManagedCodexAccount(
-                id: existing?.id ?? UUID(),
-                email: rawEmail,
-                providerAccountID: persistedMetadata.providerAccountID,
-                workspaceLabel: persistedMetadata.workspaceLabel,
-                workspaceAccountID: persistedMetadata.workspaceAccountID,
-                authFingerprint: CodexAuthFingerprint.fingerprint(
-                    homePath: homeURL.path,
-                    fileManager: self.fileManager),
-                managedHomePath: homeURL.path,
-                createdAt: existing?.createdAt ?? now,
-                updatedAt: now,
-                lastAuthenticatedAt: now)
-            let replacedAccountIDs = self.replacedAccountIDs(
-                authenticatedEmail: rawEmail,
-                providerAccountID: providerAccountID,
-                existingAccountID: existingAccountID,
-                matchedAccountID: existing?.id,
-                snapshot: snapshot)
-            existingHomePathsToDelete = snapshot.accounts
-                .filter { replacedAccountIDs.contains($0.id) }
-                .map(\.managedHomePath)
+                let account = ManagedCodexAccount(
+                    id: existing?.id ?? UUID(),
+                    email: rawEmail,
+                    providerAccountID: persistedMetadata.providerAccountID,
+                    workspaceLabel: persistedMetadata.workspaceLabel,
+                    workspaceAccountID: persistedMetadata.workspaceAccountID,
+                    authFingerprint: CodexAuthFingerprint.fingerprint(
+                        homePath: homeURL.path,
+                        fileManager: self.fileManager),
+                    managedHomePath: homeURL.path,
+                    createdAt: existing?.createdAt ?? now,
+                    updatedAt: now,
+                    lastAuthenticatedAt: now)
+                let replacedAccountIDs = self.replacedAccountIDs(
+                    authenticatedEmail: rawEmail,
+                    providerAccountID: providerAccountID,
+                    existingAccountID: existingAccountID,
+                    matchedAccountID: existing?.id,
+                    snapshot: snapshot)
+                let existingHomePathsToDelete = snapshot.accounts
+                    .filter { replacedAccountIDs.contains($0.id) }
+                    .map(\.managedHomePath)
 
-            let updatedSnapshot = ManagedCodexAccountSet(
-                version: snapshot.version,
-                accounts: snapshot.accounts.filter { replacedAccountIDs.contains($0.id) == false } + [account])
-            try self.store.storeAccounts(updatedSnapshot)
+                let updatedSnapshot = ManagedCodexAccountSet(
+                    version: snapshot.version,
+                    accounts: snapshot.accounts.filter { replacedAccountIDs.contains($0.id) == false } + [account])
+                try self.store.storeAccounts(updatedSnapshot)
+                return (account, existingHomePathsToDelete)
+            }
+            account = committed.0
+            existingHomePathsToDelete = committed.1
         } catch {
             try? self.removeManagedHomeIfSafe(atPath: homeURL.path)
             throw error
         }
 
-        for existingHomePathToDelete in existingHomePathsToDelete where existingHomePathToDelete != homeURL.path {
-            try? self.removeManagedHomeIfSafe(atPath: existingHomePathToDelete)
+        try? ManagedCodexAccountLock.withLock(at: self.store.lockURL) {
+            let referencedHomes = try Set(self.store.loadAccounts().accounts.map(\.managedHomePath))
+            for path in existingHomePathsToDelete where path != homeURL.path && !referencedHomes.contains(path) {
+                try? self.removeManagedHomeIfSafe(atPath: path)
+            }
         }
         return account
     }
 
     func removeManagedAccount(id: UUID) async throws {
+        try ManagedCodexAccountLock.withLock(at: self.store.lockURL) {
+            try self.removeManagedAccountLocked(id: id)
+        }
+    }
+
+    private func removeManagedAccountLocked(id: UUID) throws {
         let snapshot = try self.store.loadAccounts()
         guard let account = snapshot.account(id: id) else { return }
 

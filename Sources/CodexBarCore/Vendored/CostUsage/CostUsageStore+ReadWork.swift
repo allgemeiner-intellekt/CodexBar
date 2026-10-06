@@ -8,6 +8,7 @@ import CSQLite3
 
 struct CostUsageStoreReadWorkMetrics: Codable, Equatable, Sendable {
     var fullSnapshotReads = 0
+    var scannerSnapshotReads = 0
     var fileRows = 0
     var tokenSnapshotRows = 0
     var usageRows = 0
@@ -44,6 +45,10 @@ final class CostUsageStoreReadWorkRecorder: @unchecked Sendable {
 
     func recordFullSnapshot() {
         self.lock.withLock { self.metrics.fullSnapshotReads += 1 }
+    }
+
+    func recordScannerSnapshot() {
+        self.lock.withLock { self.metrics.scannerSnapshotReads += 1 }
     }
 
     func recordFile() {
@@ -104,17 +109,13 @@ final class CostUsageStoreReadWorkRecorder: @unchecked Sendable {
 }
 
 extension CostUsageStore {
-    private nonisolated static let readWorkRecorderLock = NSLock()
-    private nonisolated(unsafe) static var installedReadWorkRecorder: CostUsageStoreReadWorkRecorder?
-
-    nonisolated static var readWorkRecorderForTesting: CostUsageStoreReadWorkRecorder? {
-        get { self.readWorkRecorderLock.withLock { self.installedReadWorkRecorder } }
-        set { self.readWorkRecorderLock.withLock { self.installedReadWorkRecorder = newValue } }
-    }
-
     var scopedReadWorkRecorderForTesting: CostUsageStoreReadWorkRecorder? {
-        guard let recorder = Self.readWorkRecorderForTesting,
+        #if DEBUG
+        guard let recorder = CostUsageStoreTestHooks.current.readWorkRecorder,
               recorder.databaseURL == self.databaseURL else { return nil }
         return recorder
+        #else
+        return nil
+        #endif
     }
 }

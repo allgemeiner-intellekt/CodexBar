@@ -25,14 +25,14 @@ struct KimiRatioPoolTests {
         #expect(usage.primary == nil)
         #expect(usage.secondary?.usedPercent == 0)
         #expect(usage.secondary?.windowMinutes == 300)
-        #expect(usage.secondary?.resetsAt == KimiUsageSnapshot.parseDate("2026-09-16T20:15:44Z"))
+        #expect(usage.secondary?.resetsAt == ISO8601DateParser.parse("2026-09-16T20:15:44Z"))
         #expect(usage.secondary?.resetDescription == nil)
         let monthly = try #require(usage.extraRateWindows?.first)
         #expect(monthly.id == "kimi-monthly")
         #expect(monthly.title == "Total usage")
         #expect(abs(monthly.window.usedPercent - 0.56) < 0.00001)
         #expect(monthly.window.windowMinutes == ProviderPaceCapability.monthlyWindowSentinelMinutes)
-        #expect(monthly.window.resetsAt == KimiUsageSnapshot.parseDate("2026-10-17T00:00:00Z"))
+        #expect(monthly.window.resetsAt == ISO8601DateParser.parse("2026-10-17T00:00:00Z"))
         #expect(usage.loginMethod(for: .kimi) == nil)
     }
 
@@ -154,8 +154,8 @@ struct KimiRatioPoolTests {
         #expect(usage.secondary?.usedPercent == 1)
         #expect(usage.primary?.windowMinutes == 10080)
         #expect(usage.secondary?.windowMinutes == 300)
-        #expect(usage.primary?.resetsAt == KimiUsageSnapshot.parseDate("2026-09-19T16:45:59.449979Z"))
-        #expect(usage.secondary?.resetsAt == KimiUsageSnapshot.parseDate("2026-09-19T14:45:59.449979Z"))
+        #expect(usage.primary?.resetsAt == ISO8601DateParser.parse("2026-09-19T16:45:59.449979Z"))
+        #expect(usage.secondary?.resetsAt == ISO8601DateParser.parse("2026-09-19T14:45:59.449979Z"))
         #expect(usage.extraRateWindows == nil)
     }
 
@@ -246,6 +246,6 @@ struct KimiRatioPoolTests {
     """
 
     private static func parse(_ json: String) throws -> UsageSnapshot {
-        try KimiUsageFetcher._parseCodeAPIUsageForTesting(Data(json.utf8)).toUsageSnapshot()
+        try KimiUsageFetcher.parseCodeAPIUsage(from: Data(json.utf8)).toUsageSnapshot()
     }
 }

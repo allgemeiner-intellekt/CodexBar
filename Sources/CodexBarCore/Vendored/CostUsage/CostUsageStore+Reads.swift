@@ -99,10 +99,21 @@ extension CostUsageStore {
         }
     }
 
-    func readSnapshot() -> CostUsageStoreSnapshot {
+    func readSnapshot(loadTokenSnapshots: Bool = true) -> CostUsageStoreSnapshot {
         self.withDatabase(default: Self.emptySnapshot) { database in
             try Self.inReadTransaction(database) {
-                try Self.readSnapshot(database, recorder: self.scopedReadWorkRecorderForTesting)
+                let snapshot = try Self.readSnapshot(
+                    database,
+                    loadTokenSnapshots: loadTokenSnapshots,
+                    recorder: self.scopedReadWorkRecorderForTesting)
+                #if DEBUG
+                if let checkpoint = CostUsageStoreTestHooks.current.codexCacheReadCheckpoint,
+                   checkpoint.databaseURL == self.databaseURL
+                {
+                    try checkpoint.checkpoint()
+                }
+                #endif
+                return snapshot
             }
         }
     }
@@ -186,6 +197,8 @@ extension CostUsageStore {
 
     static func readSnapshot(
         _ database: OpaquePointer,
+        loadTokenSnapshots: Bool = true,
+        loadUsageRows: Bool = true,
         recorder: CostUsageStoreReadWorkRecorder?) throws -> CostUsageStoreSnapshot
     {
         let snapshot = try CostUsageStoreSnapshot(
@@ -194,8 +207,9 @@ extension CostUsageStore {
                 database: database,
                 table: "scan_metadata") ?? .empty,
             files: self.readFiles(database, recorder: recorder),
-            tokenSnapshots: self.readTokenSnapshots(database, path: nil, recorder: recorder),
-            usageRows: self.readUsageRows(database, path: nil, recorder: recorder),
+            tokenSnapshots: loadTokenSnapshots
+                ? self.readTokenSnapshots(database, path: nil, recorder: recorder) : [],
+            usageRows: loadUsageRows ? self.readUsageRows(database, path: nil, recorder: recorder) : [],
             fileDayAggregates: self.readFileDayAggregates(database, path: nil),
             dayAggregates: self.readDayAggregates(database, sinceDay: nil, untilDay: nil),
             forkLineage: self.readForkLineage(database, path: nil),
@@ -209,7 +223,11 @@ extension CostUsageStore {
                 database: database,
                 table: "lookback_state"),
             accumulators: self.readAccumulators(database, path: nil, recorder: recorder))
-        recorder?.recordFullSnapshot()
+        if loadTokenSnapshots {
+            recorder?.recordFullSnapshot()
+        } else {
+            recorder?.recordScannerSnapshot()
+        }
         return snapshot
     }
 
@@ -314,6 +332,17 @@ extension CostUsageStore {
         path: String?,
         recorder: CostUsageStoreReadWorkRecorder? = nil) throws -> [CostUsageStoreUsageRow]
     {
+        var values: [CostUsageStoreUsageRow] = []
+        try self.forEachUsageRow(database, path: path, recorder: recorder) { values.append($0) }
+        return values
+    }
+
+    static func forEachUsageRow(
+        _ database: OpaquePointer,
+        path: String?,
+        recorder: CostUsageStoreReadWorkRecorder? = nil,
+        visit: (CostUsageStoreUsageRow) -> Void) throws
+    {
         var sql = """
         SELECT f.path, r.row_index, r.payload
         FROM usage_rows r JOIN files f ON f.id = r.file_id
@@ -327,7 +356,6 @@ extension CostUsageStore {
         if let path {
             self.bind(path, to: statement, at: 1)
         }
-        var values: [CostUsageStoreUsageRow] = []
         var result = sqlite3_step(statement)
         while result == SQLITE_ROW {
             guard let path = self.columnText(statement, at: 0),
@@ -335,11 +363,10 @@ extension CostUsageStore {
                   let payload = self.columnData(statement, at: 2)
             else { throw StoreError.invalidData }
             recorder?.recordUsageRow(payloadBytes: payload.count)
-            values.append(CostUsageStoreUsageRow(path: path, rowIndex: rowIndex, payload: payload))
+            visit(CostUsageStoreUsageRow(path: path, rowIndex: rowIndex, payload: payload))
             result = sqlite3_step(statement)
         }
         guard result == SQLITE_DONE else { throw StoreError.sqlite(result) }
-        return values
     }
 
     static func readDayAggregates(

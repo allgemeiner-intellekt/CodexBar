@@ -9,9 +9,12 @@ import CSQLite3
 
 /// Synthetic, not a private capture. Independent schema and JSONL producer provenance:
 /// https://github.com/junhoyeo/tokscale/tree/62ca1eb1677556972ba963fdfa3a41ab23c1eb4b
-/// crates/tokscale-core/src/sessions/antigravity_cli.rs records six DBs / 140 turns:
-/// usage #9 text + #10 thinking == #3 total output. The opaque 1.1.18 time inference is NOT used.
-/// The separate producer in crates/tokscale-cli/src/antigravity.rs emits sessionId and retry usage.
+/// crates/tokscale-core/src/sessions/antigravity_cli.rs records six DBs / 140 turns and the
+/// usage #9 + #10 == #3 total output identity. Tokscale itself reads #9 as text and #10 as thinking;
+/// ccusage's Antigravity adapter reads #9 as reasoning and #10 as text, and this fixture follows
+/// ccusage, per independent confirmation from decoding real local databases. The opaque 1.1.18 time
+/// inference is NOT used. The separate producer in crates/tokscale-cli/src/antigravity.rs emits
+/// sessionId and retry usage.
 final class AntigravityLocalFixture: Sendable {
     static let now = Date(timeIntervalSince1970: 1_787_832_000) // 2026-08-27 12:00 UTC
     static let calendar = CostUsageBucketTimeZone.calendar(identifier: "UTC")
@@ -98,7 +101,9 @@ final class AntigravityLocalFixture: Sendable {
         var database: OpaquePointer?
         let result = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
         guard result == SQLITE_OK, let database else {
-            if let database { sqlite3_close(database) }
+            if let database {
+                sqlite3_close(database)
+            }
             throw AntigravityLocalReader.ScanFailure.invalid
         }
         return database
@@ -160,7 +165,7 @@ final class AntigravityLocalFixture: Sendable {
     static func blob(
         model: String? = "fixture-model-a",
         label: String? = "Fixture model",
-        system: UInt64 = 11,
+        modelID: UInt64 = 1298,
         input: UInt64 = 100,
         output: UInt64 = 30,
         cacheRead: UInt64 = 50,
@@ -168,23 +173,30 @@ final class AntigravityLocalFixture: Sendable {
         response: String? = nil,
         seconds: UInt64? = 1_787_832_000) -> [UInt8]
     {
-        var usage = self.varint(1, system) + self.varint(2, input) + self.varint(5, cacheRead)
-            + self.varint(9, output) + self.varint(10, reasoning)
-        if let response { usage += self.message(11, Array(response.utf8)) }
+        var usage = self.varint(1, modelID) + self.varint(2, input) + self.varint(5, cacheRead)
+            + self.varint(9, reasoning) + self.varint(10, output)
+        if let response {
+            usage += self.message(11, Array(response.utf8))
+        }
         var chat = self.message(4, usage)
         if let seconds {
             chat += self.message(9, self.message(4, self.varint(1, seconds) + self.varint(2, 250_000_000)))
         }
-        if let model { chat += self.message(19, Array(model.utf8)) }
-        if let label { chat += self.message(21, Array(label.utf8)) }
+        if let model {
+            chat += self.message(19, Array(model.utf8))
+        }
+        if let label {
+            chat += self.message(21, Array(label.utf8))
+        }
         return self.message(1, chat)
     }
 
     static func blobWithRootEnvelope(
         stepUUID: String? = "step-uuid-1",
+        botID: String? = nil,
         model: String? = "fixture-model-a",
         label: String? = "Fixture model",
-        system: UInt64 = 11,
+        modelID: UInt64 = 1298,
         input: UInt64 = 100,
         output: UInt64 = 30,
         cacheRead: UInt64 = 50,
@@ -193,27 +205,45 @@ final class AntigravityLocalFixture: Sendable {
         seconds: UInt64? = nil) -> [UInt8]
     {
         var root = self.message(2, [0x01, 0x02])
-        if let stepUUID { root += self.message(4, Array(stepUUID.utf8)) }
-        var usage = self.varint(1, system) + self.varint(2, input) + self.varint(5, cacheRead)
-            + self.varint(9, output) + self.varint(10, reasoning)
-        if let response { usage += self.message(11, Array(response.utf8)) }
+        if let stepUUID {
+            root += self.message(4, Array(stepUUID.utf8))
+        }
+        var usage = self.varint(1, modelID) + self.varint(2, input) + self.varint(5, cacheRead)
+            + self.varint(9, reasoning) + self.varint(10, output)
+        if let botID {
+            usage += self.message(7, Array(botID.utf8))
+        }
+        if let response {
+            usage += self.message(11, Array(response.utf8))
+        }
         var chat = self.message(4, usage)
         if let seconds {
             chat += self.message(9, self.message(4, self.varint(1, seconds) + self.varint(2, 250_000_000)))
         }
-        if let model { chat += self.message(19, Array(model.utf8)) }
-        if let label { chat += self.message(21, Array(label.utf8)) }
+        if let model {
+            chat += self.message(19, Array(model.utf8))
+        }
+        if let label {
+            chat += self.message(21, Array(label.utf8))
+        }
         root += self.message(1, chat)
         return root
     }
 
     static func stepMetadataBlob(
         stepUUID: String? = "step-uuid-1",
+        botID: String? = nil,
         seconds: UInt64 = 1_787_832_000,
         nanos: UInt64 = 250_000_000) -> [UInt8]
     {
         var meta = self.message(1, self.varint(1, seconds) + self.varint(2, nanos))
-        if let stepUUID { meta += self.message(12, Array(stepUUID.utf8)) }
+        if let botID {
+            let usage = self.message(7, Array(botID.utf8))
+            meta += self.message(9, usage)
+        }
+        if let stepUUID {
+            meta += self.message(12, Array(stepUUID.utf8))
+        }
         return meta
     }
 
