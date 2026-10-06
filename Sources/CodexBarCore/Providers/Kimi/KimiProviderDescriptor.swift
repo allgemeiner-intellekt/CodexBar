@@ -81,7 +81,8 @@ public enum KimiProviderDescriptor {
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
                 debugLogUnavailableMessage: "Kimi debug log not yet implemented",
-                browserCookieOrder: nil,
+                browserCookieOrder: BrowserCookieImportSupport.chromeOnly(
+                    reason: "Kimi imports only Chrome to avoid unrelated browser prompts."),
                 dashboardURL: KimiRegion.china.consoleURL.absoluteString,
                 statusPageURL: nil),
             branding: ProviderBranding(
