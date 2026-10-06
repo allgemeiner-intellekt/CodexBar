@@ -10,6 +10,8 @@ extension ClaudeUsageSnapshot {
             opus: self.opus,
             extraRateWindows: extraRateWindows,
             providerCost: providerCost,
+            resetCredits: self.resetCredits,
+            cloudCredits: self.cloudCredits,
             updatedAt: self.updatedAt,
             accountEmail: self.accountEmail,
             accountOrganization: self.accountOrganization,
@@ -20,6 +22,7 @@ extension ClaudeUsageSnapshot {
             oauthCredentialOwner: self.oauthCredentialOwner,
             oauthKeychainCredentialMismatch: self.oauthKeychainCredentialMismatch,
             oauthKeychainCredentialAbsent: self.oauthKeychainCredentialAbsent,
-            oauthKeychainCredentialUnavailable: self.oauthKeychainCredentialUnavailable)
+            oauthKeychainCredentialUnavailable: self.oauthKeychainCredentialUnavailable,
+            accountID: self.accountID)
     }
 }

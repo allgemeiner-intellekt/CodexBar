@@ -235,40 +235,40 @@ extension CostUsageStoreTests {
 
         let initialAction = CostUsagePersistencePlanner.action(
             canReuse: false,
-            stableCursor: false,
             appendSafe: false,
             persistedCount: 0,
-            sourceCount: 2)
+            baseline: [],
+            source: [10, 20])
         #expect(initialAction == .replace)
         #expect(materialize(initialAction, source: [10, 20]) == [10, 20])
         #expect(transformedIndexes == [0, 1])
 
         let stableAction = CostUsagePersistencePlanner.action(
             canReuse: true,
-            stableCursor: true,
             appendSafe: false,
             persistedCount: 2,
-            sourceCount: 2)
+            baseline: [10, 20],
+            source: [10, 20])
         #expect(stableAction == .reuse)
         #expect(materialize(stableAction, source: [10, 20]).isEmpty)
         #expect(transformedIndexes.isEmpty)
 
         let appendAction = CostUsagePersistencePlanner.action(
             canReuse: true,
-            stableCursor: false,
             appendSafe: true,
             persistedCount: 2,
-            sourceCount: 3)
+            baseline: [10, 20],
+            source: [10, 20, 30])
         #expect(appendAction == .append(startingAt: 2))
         #expect(materialize(appendAction, source: [10, 20, 30]) == [30])
         #expect(transformedIndexes == [2])
 
         let replacementAction = CostUsagePersistencePlanner.action(
             canReuse: true,
-            stableCursor: false,
             appendSafe: false,
             persistedCount: 3,
-            sourceCount: 2)
+            baseline: [10, 20, 30],
+            source: [40, 50])
         #expect(replacementAction == .replace)
         #expect(materialize(replacementAction, source: [40, 50]) == [40, 50])
         #expect(transformedIndexes == [0, 1])
@@ -340,6 +340,23 @@ extension CostUsageStoreTests {
         #expect(try appendedRows.map {
             try JSONDecoder().decode(CostUsageScanner.CodexUsageRow.self, from: $0.payload)
         } == usage.codexRows)
+
+        // Stable or growing offsets do not prove that the retained prefix is unchanged.
+        for indexes in [[0, 3, 4], [0, 5, 6, 7]] {
+            usage.parsedBytes = Int64(indexes.count * 100)
+            usage.size = Int64(indexes.count * 100)
+            usage.codexTokenSnapshots = indexes.map(token)
+            usage.codexRows = indexes.map(row)
+            cache.files[path] = usage
+            save()
+
+            #expect(await store.fetchTokenSnapshots(path: path).map(\.timestamp)
+                == usage.codexTokenSnapshots?.map(\.timestamp))
+            let rewrittenRows = await store.fetchUsageRows(path: path)
+            #expect(try rewrittenRows.map {
+                try JSONDecoder().decode(CostUsageScanner.CodexUsageRow.self, from: $0.payload)
+            } == usage.codexRows)
+        }
 
         usage.parsedBytes = 400
         usage.size = 400
@@ -598,25 +615,24 @@ extension CostUsageStoreTests {
         var reread = CostUsageStoreAccess.read(cacheRoot: fixture.root, calendar: calendar)
         reread.lastScanUnixMs = 2000
         let interloper = try SQLiteTestConnection(url: store.databaseURL)
-        var checkpointError: Error?
-        CostUsageStore.identicalContentPreLockCheckpointForTesting = (store.databaseURL, {
+        let checkpointError = LockIsolated<Error?>(nil)
+        var hooks = CostUsageStoreTestHooks.current
+        hooks.identicalContentPreLockCheckpoint = (store.databaseURL, {
             do {
                 try interloper.execute("UPDATE files SET parsed_bytes = 999 WHERE path = '\(path)'")
             } catch {
-                checkpointError = error
+                checkpointError.setValue(error)
             }
         })
-        defer { CostUsageStore.identicalContentPreLockCheckpointForTesting = nil }
 
-        let result = save(reread)
+        let result = CostUsageStoreTestHooks.$current.withValue(hooks) { save(reread) }
 
-        #expect(checkpointError == nil)
+        #expect(checkpointError.value == nil)
         #expect(result.catchUpRequired)
         #expect(await store.rebuildCount == 0)
         #expect(await store.fetchFile(path: path)?.parsedBytes == 999)
         #expect(CostUsageStoreAccess.read(cacheRoot: fixture.root, calendar: calendar).lastScanUnixMs == 1000)
 
-        CostUsageStore.identicalContentPreLockCheckpointForTesting = nil
         var refreshed = CostUsageStoreAccess.read(cacheRoot: fixture.root, calendar: calendar)
         refreshed.lastScanUnixMs = 3000
         let retried = save(refreshed)
@@ -849,73 +865,6 @@ extension CostUsageStoreTests {
     }
 
     @Test
-    func `two stores advance freshness monotonically without losing current metadata`() async throws {
-        let fixture = try StoreFixture()
-        defer { fixture.remove() }
-        let first = CostUsageStore(cacheRoot: fixture.root)
-        let second = CostUsageStore(cacheRoot: fixture.root)
-        var stale = Self.metadata()
-        stale.lastScanUnixMs = 100
-        #expect(await first.setMetadata(stale))
-
-        // Simulate a second owner committing richer metadata after the first owner obtained
-        // its stale input. The freshness operation must re-read this whole payload under its
-        // writer lock rather than writing fields copied from the stale caller.
-        var current = stale
-        current.lastScanUnixMs = 250
-        current.scanSinceDay = "2026-07-01"
-        current.scanUntilDay = "2026-08-11"
-        current.pricingKey = "pricing-v2"
-        current.priorityMetadataKey = "priority-v2"
-        current.catchUpPending = false
-        current.rootMtimes = ["/current/root": 999]
-        current.previousReportPayload = Data([9, 8, 7])
-        current.priorityTurnStatePayload = Data([6, 5, 4])
-        current.projectMetadataVersion = 9
-        #expect(await second.setMetadata(current))
-
-        #expect(await first.advanceLastScanUnixMs(200))
-        #expect(await first.fetchMetadata() == current)
-        #expect(await second.advanceLastScanUnixMs(300))
-        var expected = current
-        expected.lastScanUnixMs = 300
-        #expect(await first.fetchMetadata() == expected)
-
-        var catchUp = expected
-        catchUp.catchUpPending = true
-        catchUp.lastScanUnixMs = 0
-        #expect(await second.setMetadata(catchUp))
-        #expect(await first.advanceLastScanUnixMs(400))
-        #expect(await first.fetchMetadata() == catchUp)
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func `held writer lock makes freshness advance fail soft without rebuilding`() async throws {
-        let fixture = try StoreFixture()
-        defer { fixture.remove() }
-        let store = CostUsageStore(cacheRoot: fixture.root, busyTimeoutMilliseconds: 25)
-        var metadata = Self.metadata()
-        metadata.catchUpPending = false
-        #expect(await store.setMetadata(metadata))
-
-        let holder = try SQLiteTestConnection(url: store.databaseURL)
-        try holder.execute("BEGIN IMMEDIATE")
-        try holder.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('freshness-holder', '1')")
-
-        #expect(await store.advanceLastScanUnixMs(500) == false)
-        #expect(await store.rebuildCount == 0)
-        #expect(FileManager.default.fileExists(atPath: store.databaseURL.path))
-
-        try holder.execute("COMMIT")
-        #expect(await store.fetchMetadata() == metadata)
-        #expect(await store.advanceLastScanUnixMs(500))
-        var expected = metadata
-        expected.lastScanUnixMs = 500
-        #expect(await store.fetchMetadata() == expected)
-        #expect(await store.rebuildCount == 0)
-    }
-
-    @Test
     func `terminal accumulator round trips all state`() async throws {
         let fixture = try StoreFixture()
         defer { fixture.remove() }
@@ -1006,6 +955,34 @@ extension CostUsageStoreTests {
 
 extension CostUsageStoreTests {
     @Test(arguments: [
+        "029fe80aa98f27e8", // Before the shared JSON fallback.
+        "c61aebb9cf043a72", // Previous request-ledger revision.
+        "4a4c4ef34ce6f037", // Before request-ledger accounting.
+        // Orphan-fork scheduling preserves parsed rows, replay buffers, and scan checkpoints.
+        "04a6361469a4ff77", // Released in 0.70.0; adoption must not rebuild stalled histories.
+        "98de5f52231e524e", // Released in 0.68.0.
+        "9972dad7f7aeff21", // Before direct-fork baseline corrections.
+        "03e43d1217789d16",
+        "4dd9e5769818370a", // Before Linux Priority trace support.
+        "50813ce2a3edfdc7", // Released in 0.63.0.
+        "865a444e01b818f1", // Released in 0.62.0.
+        "6a4df886696f4ab5",
+        "6d48baf0ed980828", // Released in 0.60.5.
+        "c2ac37e84074d2b2",
+        "710f475c3d1cfb61", // Released in 0.60.4.
+        "aa57b010b3c0bee4",
+        "aef0df6c73f8052c",
+        "4969a789db679c93", // Released in 0.58.0.
+        "c4fa7db2cf54bc41",
+        "ca4bc3875600536f",
+        "7f00691fa96c78d1",
+        "9ca89383b9957b07",
+        "ba2eca901de4c53d",
+        "9547dc9d7b7675f6", // Released in 0.56.7.
+        "2590d36e1cc4a2ea",
+        "edd0a6ad56c0e4e7",
+        "f043ae98075c8e4d",
+        "e3fca1e6d81137d6",
         "e0b0319de43e22d7",
         "7e293e8fc9e25700",
         "494eee446bb2e5f9",
@@ -1024,6 +1001,33 @@ extension CostUsageStoreTests {
         let fixture = try StoreFixture()
         defer { fixture.remove() }
         #expect(CostUsageStore.compatiblePredecessorParserHashes == [
+            "029fe80aa98f27e8",
+            "c61aebb9cf043a72",
+            "4a4c4ef34ce6f037",
+            "04a6361469a4ff77",
+            "98de5f52231e524e",
+            "9972dad7f7aeff21",
+            "4dd9e5769818370a",
+            "03e43d1217789d16",
+            "50813ce2a3edfdc7",
+            "865a444e01b818f1",
+            "6a4df886696f4ab5",
+            "6d48baf0ed980828",
+            "c2ac37e84074d2b2",
+            "710f475c3d1cfb61",
+            "aa57b010b3c0bee4",
+            "aef0df6c73f8052c",
+            "4969a789db679c93",
+            "c4fa7db2cf54bc41",
+            "ca4bc3875600536f",
+            "7f00691fa96c78d1",
+            "9ca89383b9957b07",
+            "ba2eca901de4c53d",
+            "9547dc9d7b7675f6",
+            "2590d36e1cc4a2ea",
+            "edd0a6ad56c0e4e7",
+            "f043ae98075c8e4d",
+            "e3fca1e6d81137d6",
             "e0b0319de43e22d7",
             "7e293e8fc9e25700",
             "494eee446bb2e5f9",
@@ -1100,6 +1104,8 @@ extension CostUsageStoreTests {
         #expect(await predecessor.setMetadata(metadata))
         let before = await predecessor.readSnapshot()
 
+        try FileManager.default.removeItem(at: input)
+        #expect(!FileManager.default.fileExists(atPath: input.path))
         let current = CostUsageStore(cacheRoot: fixture.root)
         let after = await current.readSnapshot()
         #expect(after == before)

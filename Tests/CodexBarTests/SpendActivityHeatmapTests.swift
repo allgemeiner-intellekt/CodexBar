@@ -13,11 +13,19 @@ struct SpendActivityHeatmapTests {
     }
 
     @Test
-    func `weekly and cumulative totals saturate instead of overflowing`() {
+    func `weekly and cumulative totals saturate instead of overflowing`() throws {
+        let calendar = Self.calendar
+        let start = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 2)))
+        let now = try #require(calendar.date(byAdding: .day, value: 7, to: start))
         let daily = [Int.max, 1, 0, 0, 0, 0, 0, 2]
-        let weekly = SpendActivityLevels.weeklyTotals(daily)
-        #expect(weekly == [Int.max, 2])
-        #expect(SpendActivityLevels.cumulativeTotals(weekly) == [Int.max, Int.max])
+        let points = try daily.enumerated().map { offset, tokens in
+            let day = try #require(calendar.date(byAdding: .day, value: offset, to: start))
+            return SpendDashboardModel.TokenActivityPoint(day: day, totalTokens: tokens)
+        }
+        let series = SpendActivitySeries.make(from: points, now: now, calendar: calendar)
+        let weekly = series.weeklyActivity()
+        #expect(Array(weekly.values.suffix(2)) == [Int.max, 2])
+        #expect(Array(weekly.cumulative().values.suffix(2)) == [Int.max, Int.max])
     }
 
     @Test
@@ -64,6 +72,65 @@ struct SpendActivityHeatmapTests {
         #expect(series.daily.reduce(0, +) == 1)
         #expect(visibleIndices.first.flatMap(series.date(at:)) == rangeStart)
         #expect(visibleIndices.last.flatMap(series.date(at:)) == now)
+    }
+
+    @Test(arguments: [6, 7, 11, 12, 13])
+    func `annual coverage survives midnight daylight saving transitions`(septemberDay: Int) throws {
+        var calendar = Self.calendar
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Santiago"))
+        let now = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 9,
+            day: septemberDay,
+            hour: 12)))
+        let points = try (0..<SpendActivitySeries.rangeDayCount).map { offset in
+            let date = try #require(calendar.date(byAdding: .day, value: -offset, to: now))
+            return SpendDashboardModel.TokenActivityPoint(
+                day: calendar.startOfDay(for: date),
+                totalTokens: offset + 1)
+        }
+        let series = SpendActivitySeries.make(from: points, now: now, calendar: calendar)
+        let visibleIndices = series.daily.indices.filter(series.isVisible)
+
+        #expect(series.visibleDayCount == 365)
+        #expect(series.coveredDayCount == 365)
+        #expect(series.daily.reduce(0, +) == (1...365).reduce(0, +))
+        #expect(visibleIndices.first.flatMap(series.date(at:)) == points.last?.day)
+        #expect(visibleIndices.last.flatMap(series.date(at:)) == points.first?.day)
+        for index in visibleIndices {
+            let date = try #require(series.date(at: index))
+            #expect(date == calendar.startOfDay(for: date))
+            #expect(series.daily[index] == points.first { $0.day == date }?.totalTokens)
+        }
+        let weekly = series.weeklyActivity()
+        #expect(weekly.isCovered.count(where: { $0 }) == weekly.isScanned.count(where: { $0 }))
+        #expect(weekly.cumulative().isCovered.last == true)
+    }
+
+    @Test
+    func `midnight daylight saving preserves unscanned days and scanned gaps`() throws {
+        var calendar = Self.calendar
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Santiago"))
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 11, hour: 12)))
+        let points = try (0..<365).map { offset in
+            let date = try #require(calendar.date(byAdding: .day, value: -offset, to: now))
+            return SpendDashboardModel.TokenActivityPoint(
+                day: calendar.startOfDay(for: date),
+                totalTokens: offset >= 30 || offset == 10 ? nil : 1,
+                isScanned: offset < 30)
+        }
+        let series = SpendActivitySeries.make(from: points, now: now, calendar: calendar)
+        for point in points {
+            let index = try #require(series.daily.indices.first { series.date(at: $0) == point.day })
+            #expect(series.isScanned[index] == point.isScanned)
+            #expect(series.isCovered[index] == (point.totalTokens != nil))
+        }
+        #expect(series.coveredDayCount == 29)
+        let weekly = series.weeklyActivity()
+        let firstScannedWeek = try #require(weekly.isScanned.firstIndex(of: true))
+        let cumulative = weekly.cumulative()
+        #expect(cumulative.isCovered[firstScannedWeek])
+        #expect(cumulative.isCovered.last == false)
     }
 
     @Test
@@ -148,6 +215,41 @@ struct SpendActivityHeatmapTests {
         let point = model.tokenActivity.first { $0.day == now }
         #expect(point?.totalTokens == nil)
         #expect(point?.isScanned == true)
+    }
+
+    @Test
+    func `OpenCode Go token history keeps shared activity days covered`() throws {
+        let now = try #require(Self.calendar.date(from: DateComponents(year: 2026, month: 7, day: 16, hour: 12)))
+        let today = Self.calendar.startOfDay(for: now)
+        let yesterday = try #require(Self.calendar.date(byAdding: .day, value: -1, to: today))
+        let openCodeGo = OpenCodeGoUsageSnapshot(
+            hasMonthlyUsage: true,
+            rollingUsagePercent: 0,
+            weeklyUsagePercent: 0,
+            monthlyUsagePercent: 0,
+            rollingResetInSec: 0,
+            weeklyResetInSec: 0,
+            monthlyResetInSec: 0,
+            daily: [Self.entry(day: "2026-07-16", cost: 2, tokens: 60)],
+            updatedAt: now).toCostUsageTokenSnapshot(historyDays: 30)
+        let claude = Self.snapshot(
+            entries: [
+                Self.entry(day: "2026-07-15", cost: 1, tokens: 15),
+                Self.entry(day: "2026-07-16", cost: 1, tokens: 40),
+            ],
+            historyDays: 30,
+            last30DaysTokens: 55)
+        let model = SpendDashboardModel.build(
+            inputs: [
+                .init(id: "claude", provider: .claude, displayName: "Claude", snapshot: claude),
+                .init(id: "opencodego", provider: .opencodego, displayName: "OpenCode Go", snapshot: openCodeGo),
+            ],
+            requestedDays: 30,
+            now: now,
+            calendar: Self.calendar)
+
+        #expect(model.tokenActivity.first { $0.day == today }?.totalTokens == 100)
+        #expect(model.tokenActivity.first { $0.day == yesterday }?.totalTokens == 15)
     }
 
     @Test
@@ -252,6 +354,7 @@ struct SpendActivityHeatmapTests {
         let series = SpendActivitySeries(
             daily: [Int](repeating: 1, count: covered.count),
             isCovered: covered,
+            isScanned: [Bool](repeating: true, count: covered.count),
             start: start,
             rangeStart: start,
             today: today,
@@ -485,14 +588,47 @@ struct SpendActivityHeatmapTests {
         #expect(centered == 500)
         #expect(trailing > 900)
         #expect(trailing <= gridWidth - width / 2)
-        #expect(SpendActivityGridGeometry.tooltipOriginY(
-            anchorY: 10,
-            tooltipHeight: 50,
-            gridHeight: 130) > 10)
-        #expect(SpendActivityGridGeometry.tooltipOriginY(
+    }
+
+    @Test
+    func `tooltip prefers sitting above the hovered cell when there is room`() {
+        let originY = SpendActivityGridGeometry.tooltipOriginY(
             anchorY: 120,
             tooltipHeight: 50,
-            gridHeight: 130) < 70)
+            gridHeight: 130)
+        #expect(originY == 120 - 50 - SpendActivityGridGeometry.tooltipGap)
+    }
+
+    @Test
+    func `tooltip never renders outside the grid when there is no room above`() {
+        let gridHeight: CGFloat = 130
+        let tooltipHeight: CGFloat = 50
+        for anchorY: CGFloat in [0, 10, 30] {
+            let originY = SpendActivityGridGeometry.tooltipOriginY(
+                anchorY: anchorY,
+                tooltipHeight: tooltipHeight,
+                gridHeight: gridHeight)
+            #expect(originY >= 0)
+            #expect(originY + tooltipHeight <= gridHeight)
+        }
+    }
+
+    @Test
+    func `tooltip compacts instead of overflowing a grid shorter than its full height`() {
+        // Roughly matches the grid produced at the supported 800pt minimum window width
+        // with the sidebar expanded to 380pt, where the heatmap has very little height to work with.
+        let gridHeight: CGFloat = 38
+        let height = SpendActivityGridGeometry.effectiveTooltipHeight(gridHeight: gridHeight)
+        #expect(height <= gridHeight)
+
+        for anchorY: CGFloat in [0, 10, 19, 30, gridHeight] {
+            let originY = SpendActivityGridGeometry.tooltipOriginY(
+                anchorY: anchorY,
+                tooltipHeight: height,
+                gridHeight: gridHeight)
+            #expect(originY >= 0)
+            #expect(originY + height <= gridHeight)
+        }
     }
 
     @Test
@@ -533,6 +669,7 @@ struct SpendActivityHeatmapTests {
         let series = SpendActivitySeries(
             daily: [10, 0],
             isCovered: [true, false],
+            isScanned: [true, true],
             start: start,
             rangeStart: start,
             today: start,

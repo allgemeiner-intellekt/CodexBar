@@ -10,12 +10,23 @@ IFS= read -r -d '' FAKE_SWIFT_SCRIPT <<'EOF' || true
 set -euo pipefail
 
 printf '%s\n' "$*" >> "${FAKE_SWIFT_LOG}"
+if [[ "$*" == "build --show-bin-path" ]]; then
+  printf '%s\n' "${FAKE_SWIFT_BIN_PATH:?}"
+  exit 0
+fi
 if [[ "$*" == "test list" ]]; then
   if [[ "${FAKE_SWIFT_MODE:-success}" == "list_fail" ]]; then
-    sleep 0.25
+    sleep "${FAKE_SWIFT_LIST_DELAY:?}"
     printf 'test-list stdout marker\n'
     printf 'test-list stderr marker\n' >&2
     exit 42
+  fi
+  if [[ "${FAKE_SWIFT_MODE:-success}" == "list_sparkle_fail_once" && ! -f "${FAKE_SWIFT_STATE}" ]]; then
+    printf 'failed\n' > "${FAKE_SWIFT_STATE}"
+    printf 'Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle\n' >&2
+    printf 'tried: %s/PackageFrameworks/Sparkle.framework/Versions/B/Sparkle\n' \
+      "${FAKE_SWIFT_BIN_PATH:?}" >&2
+    exit 1
   fi
   printf '%s\n' \
     "CodexBarTests.Alpha/test_one()" \
@@ -120,10 +131,17 @@ required_not_deferred = (
 )
 if required_not_deferred not in job:
     raise SystemExit("swift-test-macos must skip only required tests explicitly deferred for drafts")
-if not re.search(r"(?m)^\s+shard-index:\s+\[0,\s*1\]\s*$", job):
-    raise SystemExit("swift-test-macos must run exactly two shard indexes: [0, 1]")
-if not re.search(r"(?m)^\s+shard-count:\s+\[2\]\s*$", job):
-    raise SystemExit("swift-test-macos shard-count must be [2]")
+if not re.search(r"(?m)^\s+shard-index:\s+\[0,\s*1,\s*2\]\s*$", job):
+    raise SystemExit("swift-test-macos must run exactly three shard indexes: [0, 1, 2]")
+if not re.search(r"(?m)^\s+shard-count:\s+\[3\]\s*$", job):
+    raise SystemExit("swift-test-macos shard-count must be [3]")
+job_timeout = re.search(r"(?m)^    timeout-minutes: (\d+)$", job)
+test_step = re.search(r"(?ms)^      - name: Swift Test\n(.*?)(?=^      - |\Z)", job)
+step_timeout = re.search(r"(?m)^        timeout-minutes: (\d+)$", test_step.group(1)) if test_step else None
+if not step_timeout or int(step_timeout.group(1)) < 75:
+    raise SystemExit("Swift Test must allow at least 75 minutes for discovery and execution")
+if not job_timeout or int(job_timeout.group(1)) < int(step_timeout.group(1)) + 15:
+    raise SystemExit("macOS job must leave at least 15 minutes outside Swift Test")
 if "CODEXBAR_TEST_SHARD_INDEX=${{ matrix.shard-index }}" not in job:
     raise SystemExit("swift-test-macos must pass matrix.shard-index to Scripts/test.sh")
 if "CODEXBAR_TEST_SHARD_COUNT=${{ matrix.shard-count }}" not in job:
@@ -183,13 +201,18 @@ grep -Fq '| Shard | `2/2` |' "${GITHUB_STEP_SUMMARY}"
 grep -Fq '| Selected selections | `4` |' "${GITHUB_STEP_SUMMARY}"
 grep -Fq '| Selected groups | `1` |' "${GITHUB_STEP_SUMMARY}"
 
-reset_case shard-list-0
-run_harness --group-size 4 --timeout 10 --shard-index 0 --shard-count 2 --list-only \
-  > "${TEMP_DIR}/shard-list-0.log"
-reset_case shard-list-1
-run_harness --group-size 4 --timeout 10 --shard-index 1 --shard-count 2 --list-only \
-  > "${TEMP_DIR}/shard-list-1.log"
-cat "${TEMP_DIR}/shard-list-0.log" "${TEMP_DIR}/shard-list-1.log" \
+for shard_index in 0 1 2; do
+  reset_case "shard-list-${shard_index}"
+  CODEXBAR_TEST_SHARD_INDEX="$shard_index" CODEXBAR_TEST_SHARD_COUNT=3 \
+    "${ROOT_DIR}/Scripts/test.sh" --group-size 4 --timeout 10 --list-only \
+      --swift-command /bin/bash \
+      --swift-command-arg=-c \
+      --swift-command-arg="${FAKE_SWIFT_SCRIPT}" \
+      --swift-command-arg=fake-swift \
+      > "${TEMP_DIR}/shard-list-${shard_index}.log"
+  grep -Fq "in 1 groups in shard $((shard_index + 1))/3" "${TEMP_DIR}/shard-list-${shard_index}.log"
+done
+cat "${TEMP_DIR}"/shard-list-?.log \
   | grep -v '^Discovered ' \
   | sort > "${TEMP_DIR}/shards-combined.log"
 reset_case shard-list-all
@@ -235,18 +258,43 @@ set -e
 grep -Fq '| Full-group retries | `1` |' "${GITHUB_STEP_SUMMARY}"
 grep -Fq '| Recovered groups | `0` |' "${GITHUB_STEP_SUMMARY}"
 
-reset_case list-failure
-export FAKE_SWIFT_MODE=list_fail
-set +e
-run_harness --group-size 1 --timeout 10 > "${TEMP_DIR}/list-failure.log" 2>&1
-list_failure_status=$?
-set -e
-[[ "${list_failure_status}" -ne 0 ]]
-grep -Fq "test-list stdout marker" "${TEMP_DIR}/list-failure.log"
-grep -Fq "test-list stderr marker" "${TEMP_DIR}/list-failure.log"
-grep -Eq -- '- Discovery seconds: 0\.[1-9]' "${TEMP_DIR}/list-failure.log"
-grep -Fq '| Discovered selections | `0` |' "${GITHUB_STEP_SUMMARY}"
+for list_delay in 0.25 1.1; do
+  reset_case list-failure
+  export FAKE_SWIFT_MODE=list_fail
+  export FAKE_SWIFT_LIST_DELAY="$list_delay"
+  set +e
+  run_harness --group-size 1 --timeout 10 > "${TEMP_DIR}/list-failure.log" 2>&1
+  list_failure_status=$?
+  set -e
+  [[ "${list_failure_status}" -ne 0 ]]
+  grep -Fq "test-list stdout marker" "${TEMP_DIR}/list-failure.log"
+  grep -Fq "test-list stderr marker" "${TEMP_DIR}/list-failure.log"
+  [[ "$(wc -l < "${FAKE_SWIFT_LOG}")" -eq 1 ]]
+  # Scheduling can push discovery past one second; only a positive duration is required.
+  awk '/- Discovery seconds:/ { positive = ($4 + 0) > 0 } END { exit !positive }' \
+    "${TEMP_DIR}/list-failure.log"
+  grep -Fq '| Discovered selections | `0` |' "${GITHUB_STEP_SUMMARY}"
+done
+unset FAKE_SWIFT_LIST_DELAY
 
+reset_case sparkle-recovery
+export FAKE_SWIFT_MODE=list_sparkle_fail_once
+export FAKE_SWIFT_BIN_PATH="${TEMP_DIR}/sparkle-bin"
+mkdir -p \
+  "${FAKE_SWIFT_BIN_PATH}/Sparkle.framework/Versions/B" \
+  "${FAKE_SWIFT_BIN_PATH}/Wrong.framework" \
+  "${FAKE_SWIFT_BIN_PATH}/PackageFrameworks"
+touch "${FAKE_SWIFT_BIN_PATH}/Sparkle.framework/Versions/B/Sparkle"
+ln -s ../Wrong.framework "${FAKE_SWIFT_BIN_PATH}/PackageFrameworks/Sparkle.framework"
+run_harness --group-size 1 --limit-groups 1 --timeout 10 > "${TEMP_DIR}/sparkle-recovery.log"
+[[ "$(readlink "${FAKE_SWIFT_BIN_PATH}/PackageFrameworks/Sparkle.framework")" == "../Sparkle.framework" ]]
+[[ "$(grep -c '^test list$' "${FAKE_SWIFT_LOG}")" -eq 2 ]]
+[[ "$(grep -c '^build --show-bin-path$' "${FAKE_SWIFT_LOG}")" -eq 1 ]]
+grep -Fq "Recovered SwiftPM Sparkle test runtime; retrying discovery once." \
+  "${TEMP_DIR}/sparkle-recovery.log"
+unset FAKE_SWIFT_BIN_PATH
+
+python3 "${ROOT_DIR}/Scripts/test_fast_runner.py"
 python3 "${ROOT_DIR}/Scripts/test_swift_test_process_cleanup.py"
 
 echo "Swift test sharding tests passed."

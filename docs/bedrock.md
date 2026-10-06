@@ -26,6 +26,8 @@ and **Refresh when the menu opens** can still fetch data. Turn off that option a
 Disable AWS Bedrock in Providers to stop its app refreshes; separate CLI invocations can still make billed requests.
 
 The optional monthly budget only changes the displayed progress. It does not cap AWS charges or stop polling.
+The AWS Bedrock provider's Connection settings show these monitoring charges, link to current Cost Explorer pricing,
+and explain how the shared refresh controls reduce requests in both access-key and AWS-profile modes.
 
 ## Authentication
 
@@ -81,7 +83,7 @@ tracking continue unchanged.
 
 - Service: AWS Cost Explorer.
 - Region: `AWS_REGION` or `AWS_DEFAULT_REGION`, defaulting to `us-east-1`.
-- Usage: current-month Bedrock spend and historical daily cost buckets.
+- Usage: current-month Bedrock spend and historical daily cost buckets. Cost Explorer buckets are UTC; shared reporting periods select available date-labeled buckets, and a local date ahead of UTC remains incomplete. The shared All cost period requests the current month plus up to 13 historical months, matching [Cost Explorer’s API history limit](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-api-best-practices.html).
 - Claude activity: rolling 14-day input tokens, output tokens, and requests from the configured region's `AWS/Bedrock`
   CloudWatch metrics. Other model families are excluded.
 - Budget: `CODEXBAR_BEDROCK_BUDGET`, when set to a positive dollar amount.

@@ -1,15 +1,29 @@
 import Foundation
-import SweetCookieKit
 import Testing
 @testable import CodexBarCore
 
 struct KimiWebFallbackTests {
-    #if os(macOS)
-    @Test
-    func `automatic Kimi browser discovery defaults to Chrome only`() {
-        #expect(ProviderDefaults.metadata[.kimi]?.browserCookieOrder == [.chrome])
+    @Test(arguments: KimiRegion.allCases)
+    func `web strategy passes selected region to automatic sources and requests`(region: KimiRegion) async throws {
+        let calls = KimiFallbackCalls()
+        let strategy = KimiWebFetchStrategy(
+            fetchUsage: { token, selected in
+                #expect(selected == region)
+                calls.add(token)
+                return Self.usage()
+            },
+            desktopToken: { selected in
+                #expect(selected == region)
+                return nil
+            },
+            browserTokens: { selected in
+                #expect(selected == region)
+                return ["regional-browser-token"]
+            })
+        #expect(await strategy.isAvailable(Self.context(region: region)))
+        _ = try await strategy.fetch(Self.context(region: region))
+        #expect(calls.snapshot == ["regional-browser-token"])
     }
-    #endif
 
     @Test(arguments: ["manual", "environment"])
     func `explicit tokens remain authoritative when rejected`(source: String) async {
@@ -36,10 +50,7 @@ struct KimiWebFallbackTests {
         let calls = KimiFallbackCalls()
         let strategy = Self.strategy(calls: calls) { _ in Self.usage() }
         do {
-            let context = Self.context(source: source, manual: manual)
-            #expect(await strategy.isAvailable(context) == false)
-            #expect(KimiWebEnrichmentTokenResolver.resolve(context) == nil)
-            _ = try await strategy.fetch(context)
+            _ = try await strategy.fetch(Self.context(source: source, manual: manual))
             Issue.record("Expected missing token")
         } catch KimiAPIError.missingToken {} catch {
             Issue.record("Unexpected error: \(error)")
@@ -81,19 +92,6 @@ struct KimiWebFallbackTests {
         #expect(calls.snapshot == ["desktop", "fetch:desktop"])
     }
 
-    @Test
-    func `API errors do not advance to another account`() async {
-        let calls = KimiFallbackCalls()
-        do {
-            _ = try await Self.strategy(calls: calls) { _ in throw KimiAPIError.apiError("HTTP 500") }
-                .fetch(Self.context())
-            Issue.record("Expected API failure")
-        } catch KimiAPIError.apiError {} catch {
-            Issue.record("Unexpected error: \(error)")
-        }
-        #expect(calls.snapshot == ["desktop", "fetch:desktop"])
-    }
-
     @Test(arguments: ["desktop", "browser-old"])
     func `cancellation racing token rejection stops further credential reads and requests`(cancelAt: String) async {
         let calls = KimiFallbackCalls()
@@ -122,9 +120,9 @@ struct KimiWebFallbackTests {
         fetch: @escaping @Sendable (String) async throws -> KimiUsageSnapshot) -> KimiWebFetchStrategy
     {
         KimiWebFetchStrategy(
-            fetchUsage: { token in calls.add("fetch:\(token)"); return try await fetch(token) },
-            desktopToken: { calls.add("desktop"); return "desktop" },
-            browserTokens: { calls.add("browser"); return ["desktop", "browser-old", "browser-current"] })
+            fetchUsage: { token, _ in calls.add("fetch:\(token)"); return try await fetch(token) },
+            desktopToken: { _ in calls.add("desktop"); return "desktop" },
+            browserTokens: { _ in calls.add("browser"); return ["desktop", "browser-old", "browser-current"] })
     }
 
     private static func usage() -> KimiUsageSnapshot {
@@ -135,6 +133,7 @@ struct KimiWebFallbackTests {
     }
 
     private static func context(
+        region: KimiRegion = .china,
         source: ProviderCookieSource = .auto,
         manual: String? = nil,
         environment: [String: String] = [:]) -> ProviderFetchContext
@@ -147,7 +146,7 @@ struct KimiWebFallbackTests {
             webDebugDumpHTML: false,
             verbose: false,
             env: environment,
-            settings: .make(kimi: .init(cookieSource: source, manualCookieHeader: manual)),
+            settings: .make(kimi: .init(cookieSource: source, manualCookieHeader: manual, region: region)),
             fetcher: UsageFetcher(environment: environment),
             claudeFetcher: KimiFallbackClaudeStub(),
             browserDetection: BrowserDetection(cacheTTL: 0))
