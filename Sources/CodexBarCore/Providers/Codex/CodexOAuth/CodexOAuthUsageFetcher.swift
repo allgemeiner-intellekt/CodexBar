@@ -321,11 +321,11 @@ public struct CodexUsageResponse: Decodable, Sendable {
             self.hasCredits = (try? container.decode(Bool.self, forKey: .hasCredits)) ?? false
             self.unlimited = (try? container.decode(Bool.self, forKey: .unlimited)) ?? false
             if let balance = try? container.decode(Double.self, forKey: .balance) {
-                self.balance = balance
+                self.balance = balance.isFinite ? balance : nil
             } else if let balance = try? container.decode(String.self, forKey: .balance),
                       let value = Double(balance)
             {
-                self.balance = value
+                self.balance = value.isFinite ? value : nil
             } else {
                 self.balance = nil
             }
