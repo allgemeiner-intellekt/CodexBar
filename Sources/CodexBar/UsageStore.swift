@@ -1474,10 +1474,12 @@ extension UsageStore {
         }
     }
 
-    func refreshTokenUsage(_ provider: UsageProvider, force: Bool) async {
+    /// Returns whether a cost load was attempted, including failed or cancelled loads.
+    @discardableResult
+    func refreshTokenUsage(_ provider: UsageProvider, force: Bool) async -> Bool {
         guard ProviderDescriptorRegistry.descriptor(for: provider).tokenCost.supportsTokenCost else {
             self.resetTokenUsageState(for: provider)
-            return
+            return false
         }
 
         if Self.tokenCostRequiresProviderSnapshot(provider) {
@@ -1490,12 +1492,12 @@ extension UsageStore {
                 self.tokenErrors[provider.instanceID] = nil
                 self.tokenFailureGates[provider.instanceID]?.reset()
             }
-            return
+            return false
         }
 
         guard self.settings.isCostUsageEffectivelyEnabled(for: provider), self.isEnabled(provider) else {
             self.resetTokenUsageState(for: provider)
-            return
+            return false
         }
 
         // Provider-specific by design: Cursor cost shares the dashboard-cookie source policy with status fetching.
@@ -1503,12 +1505,12 @@ extension UsageStore {
         // to Off, skip the network fetch entirely (mirrors CursorProviderDescriptor.checkStatus).
         if provider == .cursor, self.settings.cursorCookieSource == .off {
             self.resetTokenUsageState(for: provider)
-            return
+            return false
         }
 
-        guard await self.refreshPiHistoryScope(for: provider) else { return }
+        guard await self.refreshPiHistoryScope(for: provider) else { return false }
 
-        guard !self.tokenRefreshInFlight.contains(provider.instanceID) else { return }
+        guard !self.tokenRefreshInFlight.contains(provider.instanceID) else { return false }
 
         let now = Date()
         let historyDays = self.settings.costReportingPeriod.days(
@@ -1517,21 +1519,21 @@ extension UsageStore {
         // Cursor cost reuses the status cookie policy: a Manual source forwards the manual header so
         // cost and status share the same session; other sources fall back to auto resolution.
         guard case let .proceed(cursorCookieHeaderOverride) = self.prepareCursorCostCookie(for: provider) else {
-            return
+            return false
         }
         let costScope = self.tokenCostScope(for: provider)
         let costScopeSignature = self.tokenSnapshotScopeSignature(for: provider)
         let publicationScope = self.tokenRefreshPublicationScope(
             for: provider, historyDays: historyDays, costScopeSignature: costScopeSignature)
         if !force, self.tokenRefreshFailureIsCoolingDown(provider: provider, now: now) {
-            return
+            return false
         }
         if !force, self.tokenRefreshCanReuseCurrentSnapshot(
             provider: provider,
             now: now,
             costScopeSignature: costScopeSignature)
         {
-            return
+            return false
         }
         self.tokenFetchFailureCooldowns.removeValue(forKey: provider.instanceID)
         self.lastTokenFetchAt[provider.instanceID] = now
@@ -1545,7 +1547,7 @@ extension UsageStore {
                 self.lastTokenFetchAt.removeValue(forKey: provider.instanceID)
                 self.lastTokenFetchScope.removeValue(forKey: provider.instanceID)
             }
-            return
+            return true
         }
 
         let startedAt = Date()
@@ -1581,7 +1583,7 @@ extension UsageStore {
                     attemptedAt: now,
                     costScopeSignature: costScopeSignature)
                 self.requestTokenRefreshAfterStaleCompletion(for: provider)
-                return
+                return true
             }
             let cancelled = Task.isCancelled || error is CancellationError
             let retryDelay = Self.tokenFetchFailureRetryDelay(error, ttl: self.tokenFetchTTL)
@@ -1594,7 +1596,7 @@ extension UsageStore {
                 self.tokenFetchFailureCooldowns[provider.instanceID] = TokenFetchFailureCooldown(
                     attemptedAt: now, retryAfter: now.addingTimeInterval(retryDelay), scope: publicationScope)
             }
-            if cancelled { return }
+            if cancelled { return true }
             let duration = Date().timeIntervalSince(startedAt)
             let msg = error.localizedDescription
             let durationText = String(format: "%.2f", duration)
@@ -1610,6 +1612,7 @@ extension UsageStore {
                 self.tokenErrors[provider.instanceID] = nil
             }
         }
+        return true
     }
 }
 

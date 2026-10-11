@@ -19,7 +19,7 @@ public enum KimiCookieHeader {
         if let envToken = self.override(from: context.env["KIMI_MANUAL_COOKIE"]) {
             return envToken
         }
-        if let envToken = self.override(from: context.env["KIMI_AUTH_TOKEN"]) {
+        if let envToken = self.override(from: KimiSettingsReader.authToken(environment: context.env)) {
             return envToken
         }
 

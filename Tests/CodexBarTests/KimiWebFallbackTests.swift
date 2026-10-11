@@ -3,6 +3,61 @@ import Testing
 @testable import CodexBarCore
 
 struct KimiWebFallbackTests {
+    @Test(arguments: ["KIMI_AUTH_TOKEN", "kimi_auth_token"], [false, true])
+    func `environment JWT overrides automatic accounts after normalization`(key: String, quoted: Bool) async throws {
+        let calls = KimiFallbackCalls()
+        let token = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJmaXh0dXJlIn0.fixture"
+        let context = Self.context(environment: [key: quoted ? " \"\(token)\" " : token])
+        let strategy = Self.strategy(calls: calls) { _ in Self.usage() }
+
+        #expect(await strategy.isAvailable(context))
+        _ = try await strategy.fetch(context)
+
+        #expect(calls.snapshot == ["fetch:\(token)"])
+    }
+
+    @Test(arguments: ["uppercase", "manual environment", "manual settings"])
+    func `explicit cookie precedence is preserved with lowercase environment alias`(source: String) async throws {
+        let calls = KimiFallbackCalls()
+        var environment = [
+            "KIMI_AUTH_TOKEN": "kimi-auth=uppercase",
+            "kimi_auth_token": "kimi-auth=lowercase",
+        ]
+        if source != "uppercase" {
+            environment["KIMI_MANUAL_COOKIE"] = "kimi-auth=manual-environment"
+        }
+        let manual = source == "manual settings" ? "kimi-auth=manual-settings" : nil
+        let context = Self.context(
+            source: manual == nil ? .auto : .manual,
+            manual: manual,
+            environment: environment)
+        let expected = switch source {
+        case "manual settings": "manual-settings"
+        case "manual environment": "manual-environment"
+        default: "uppercase"
+        }
+
+        _ = try await Self.strategy(calls: calls) { _ in Self.usage() }.fetch(context)
+
+        #expect(calls.snapshot == ["fetch:\(expected)"])
+    }
+
+    @Test
+    func `rejected lowercase environment JWT does not switch to automatic accounts`() async {
+        let calls = KimiFallbackCalls()
+        let token = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJmaXh0dXJlIn0.fixture"
+        let strategy = Self.strategy(calls: calls) { _ in throw KimiAPIError.invalidToken }
+
+        do {
+            _ = try await strategy.fetch(Self.context(environment: ["kimi_auth_token": token]))
+            Issue.record("Expected authoritative token rejection")
+        } catch KimiAPIError.invalidToken {} catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(calls.snapshot == ["fetch:\(token)"])
+    }
+
     @Test(arguments: KimiRegion.allCases)
     func `web strategy passes selected region to automatic sources and requests`(region: KimiRegion) async throws {
         let calls = KimiFallbackCalls()
