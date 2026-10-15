@@ -16,6 +16,7 @@ struct KimiMenuBarWindowTests {
         let weekly = Self.window(used: 50, minutes: 10080)
         let snapshot = UsageSnapshot(
             primary: primary,
+            secondary: nil,
             extraRateWindows: [
                 NamedRateWindow(id: "session", title: "Session", window: session),
                 NamedRateWindow(id: "weekly", title: "Weekly", window: weekly),
