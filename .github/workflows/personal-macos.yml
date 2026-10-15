@@ -33,23 +33,20 @@ env:
 jobs:
   check:
     if: github.repository == 'allgemeiner-intellekt/CodexBar' && inputs.run_validation
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
           ref: ${{ inputs.source_ref || github.sha }}
-      - name: Select Xcode
+      - name: Select Xcode 27
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
-            if [[ -d "$candidate" ]]; then
-              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
-              break
-            fi
-          done
+          sudo xcode-select -s /Applications/Xcode_27.0.app/Contents/Developer
+          echo "DEVELOPER_DIR=/Applications/Xcode_27.0.app/Contents/Developer" >> "$GITHUB_ENV"
+          [[ "$(/usr/bin/xcodebuild -version)" == Xcode\ 27* ]]
       - name: Record toolchain
         id: toolchain
         shell: bash
@@ -71,8 +68,8 @@ jobs:
 
   test:
     if: github.repository == 'allgemeiner-intellekt/CodexBar' && inputs.run_validation
-    runs-on: macos-26
-    timeout-minutes: 60
+    runs-on: xcode-27
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -82,16 +79,13 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.source_ref || github.sha }}
-      - name: Select Xcode
+      - name: Select Xcode 27
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
-            if [[ -d "$candidate" ]]; then
-              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
-              break
-            fi
-          done
+          sudo xcode-select -s /Applications/Xcode_27.0.app/Contents/Developer
+          echo "DEVELOPER_DIR=/Applications/Xcode_27.0.app/Contents/Developer" >> "$GITHUB_ENV"
+          [[ "$(/usr/bin/xcodebuild -version)" == Xcode\ 27* ]]
       - name: Record toolchain
         id: toolchain
         shell: bash
@@ -109,15 +103,17 @@ jobs:
           restore-keys: |
             personal-test-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-
       - name: Full tests, shard ${{ matrix.shard }}
+        timeout-minutes: 75
         env:
-          CODEXBAR_TEST_GROUP_SIZE: '4'
+          CODEXBAR_TEST_GROUP_SIZE: '8'
           CODEXBAR_TEST_SUITE_TIMEOUT: '180'
           CODEXBAR_TEST_RETRY_NON_TIMEOUT_FAILURES: '0'
           CODEXBAR_TEST_SHARD_INDEX: ${{ matrix.shard }}
           CODEXBAR_TEST_SHARD_COUNT: '2'
         run: |
           mkdir -p logs
-          make test 2>&1 | tee logs/test.log
+          # Match upstream's verified direct workers while retaining both complete-inventory shards.
+          ./Scripts/test.sh --direct-workers 2 2>&1 | tee logs/test.log
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
@@ -131,7 +127,7 @@ jobs:
       ${{ always() && !cancelled() && github.repository == 'allgemeiner-intellekt/CodexBar' &&
           ((inputs.run_validation && needs.check.result == 'success' && needs.test.result == 'success') ||
            (!inputs.run_validation && needs.check.result == 'skipped' && needs.test.result == 'skipped')) }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       CODEXBAR_SIGNING: adhoc
@@ -142,16 +138,13 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.source_ref || github.sha }}
-      - name: Select Xcode
+      - name: Select Xcode 27
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
-            if [[ -d "$candidate" ]]; then
-              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
-              break
-            fi
-          done
+          sudo xcode-select -s /Applications/Xcode_27.0.app/Contents/Developer
+          echo "DEVELOPER_DIR=/Applications/Xcode_27.0.app/Contents/Developer" >> "$GITHUB_ENV"
+          [[ "$(/usr/bin/xcodebuild -version)" == Xcode\ 27* ]]
       - name: Record toolchain
         id: toolchain
         shell: bash

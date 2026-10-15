@@ -4,6 +4,29 @@ import Testing
 @testable import CodexBarCore
 
 struct KimiMenuBarWindowTests {
+    @Test(arguments: [false, true])
+    func `semantic windows ignore absent and synthetic lanes and use extra windows`(placeholder: Bool) {
+        let primary = placeholder ? RateWindow(
+            usedPercent: 0,
+            windowMinutes: 10080,
+            resetsAt: nil,
+            resetDescription: nil,
+            isSyntheticPlaceholder: true) : nil
+        let session = Self.window(used: 25, minutes: 300)
+        let weekly = Self.window(used: 50, minutes: 10080)
+        let snapshot = UsageSnapshot(
+            primary: primary,
+            secondary: nil,
+            extraRateWindows: [
+                NamedRateWindow(id: "session", title: "Session", window: session),
+                NamedRateWindow(id: "weekly", title: "Weekly", window: weekly),
+            ],
+            updatedAt: Date())
+        let windows = KimiProviderDescriptor.descriptor.presentation.semanticWindows(snapshot: snapshot)
+        #expect(windows.session == session)
+        #expect(windows.weekly == weekly)
+    }
+
     @Test
     func `exhausted membership takes precedence over reset Code windows`() throws {
         let monthly = Self.monthly(used: 100)

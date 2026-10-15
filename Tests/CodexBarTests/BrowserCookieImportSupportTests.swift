@@ -132,6 +132,7 @@ struct BrowserCookieImportSupportTests {
 
     @Test
     func `automatic provider cookie orders include every supported browser`() {
+        #expect(BrowserCookieImportSupport.importOrder(for: .kimi) == Browser.defaultImportOrder)
         #expect(ReplicateCookieImporter.resolvedImportOrder(nil) == Browser.defaultImportOrder)
         #expect(ReplicateCookieImporter.resolvedImportOrder([]) == Browser.defaultImportOrder)
         for descriptor in ProviderDescriptorRegistry.all {
