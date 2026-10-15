@@ -75,6 +75,7 @@ enum BurnProviderChoice: String, AppEnum {
     case aiand
     case zoommate
     case xai
+    case xapi
     case notion
     case ibmbob
     case nous
@@ -96,6 +97,18 @@ enum BurnProviderChoice: String, AppEnum {
     case museai
     case lithosai
     case workbuddy
+    case tavily
+    case linkup
+    case tinyapi
+    case exa
+    case cosmic
+    case aerostack
+    case sailresearch
+    case sofya
+    case fal
+    case flora
+    case parallel
+    case claudeplatform
 
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Provider")
 
@@ -172,6 +185,7 @@ enum BurnProviderChoice: String, AppEnum {
         .aiand: DisplayRepresentation(title: "ai&"),
         .zoommate: DisplayRepresentation(title: "ZoomMate"),
         .xai: DisplayRepresentation(title: "xAI"),
+        .xapi: DisplayRepresentation(title: "X API"),
         .notion: DisplayRepresentation(title: "Notion AI"),
         .ibmbob: DisplayRepresentation(title: "IBM Bob"),
         .nous: DisplayRepresentation(title: "Nous Portal"),
@@ -194,6 +208,18 @@ enum BurnProviderChoice: String, AppEnum {
         .museai: DisplayRepresentation(title: "Muse (muse.ai)"),
         .lithosai: DisplayRepresentation(title: "LithosAI"),
         .workbuddy: DisplayRepresentation(title: "WorkBuddy"),
+        .tavily: DisplayRepresentation(title: "Tavily"),
+        .linkup: DisplayRepresentation(title: "Linkup"),
+        .tinyapi: DisplayRepresentation(title: "TinyApi"),
+        .exa: DisplayRepresentation(title: "Exa"),
+        .cosmic: DisplayRepresentation(title: "Cosmic AI"),
+        .aerostack: DisplayRepresentation(title: "Aerostack"),
+        .sailresearch: DisplayRepresentation(title: "Sail Research"),
+        .sofya: DisplayRepresentation(title: "Sofya"),
+        .fal: DisplayRepresentation(title: "fal"),
+        .flora: DisplayRepresentation(title: "FLORA"),
+        .parallel: DisplayRepresentation(title: "Parallel"),
+        .claudeplatform: DisplayRepresentation(title: "Claude Platform"),
     ]
 
     var provider: UsageProvider {
@@ -343,13 +369,14 @@ struct BurnDownState {
     func title(for selection: BurnWindowChoice) -> String {
         let metadata = self.entry.provider.firstPartyProvider.flatMap { ProviderDefaults.metadata[$0] }
         switch selection {
-        case .session: return "Session"
-        case .weekly: return "Weekly"
+        case .session: return W("Session")
+        case .weekly: return W("Weekly")
         case .primary, .secondary, .tertiary:
-            return self.entry.usageRows?.first { $0.id == selection.rawValue }?.title
+            let title = self.entry.usageRows?.first { $0.id == selection.rawValue }?.title
                 ?? (selection == .primary ? metadata?.sessionLabel
                     : selection == .secondary ? metadata?.weeklyLabel : metadata?.opusLabel)
                 ?? "Usage"
+            return W(title)
         }
     }
 

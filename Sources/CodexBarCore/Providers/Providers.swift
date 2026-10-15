@@ -89,6 +89,7 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case aiand
     case zoommate
     case xai
+    case xapi
     case notion
     case ibmbob
     case nous
@@ -110,6 +111,18 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case museai
     case lithosai
     case workbuddy
+    case tavily
+    case linkup
+    case tinyapi
+    case exa
+    case cosmic
+    case aerostack
+    case sailresearch
+    case sofya
+    case fal
+    case flora
+    case parallel
+    case claudeplatform
 }
 
 // swiftformat:enable sortDeclarations

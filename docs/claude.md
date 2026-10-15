@@ -13,6 +13,15 @@ The **Plan Usage** submenu includes recorded remaining-quota burndown above util
 using the same Session, Weekly, and Sonnet labels. See [recorded quota burndown](widgets/burndown-proof.md)
 for capture-age semantics and the existing history retention/privacy behavior.
 
+OAuth history uses a stable account/profile identity after two stable credential observations corroborate that
+binding. External token rotations therefore continue the same history after the new credential is corroborated.
+Saved token-scoped fragments with matching verified bindings migrate into that account's history on a successful
+sample. Unbound fragments, obsolete bindings, and other accounts stay separate; correcting a conflicting binding
+preserves its ambiguous old fragment without attributing it to the newly confirmed account. If that fragment was
+already merged, the affected account bucket is preserved but hidden, and fresh samples start a new account scope.
+This quarantine survives empty responses and restarts. Explicit OAuth tokens without Claude Code account evidence
+remain credential-scoped.
+
 Claude supports three usage data paths plus local cost usage. The main provider pipeline uses runtime-specific
 automatic selection, but the codebase still has multiple active Claude `.auto` decision sites while the refactor is
 pending. For the exact current-state parity contract, see
@@ -38,6 +47,12 @@ Incomplete proxy records with an explicit null `stop_reason`, positive input, ze
 
 Usage source picker:
 - Preferences → Providers → Claude → Usage source (Auto/OAuth/Web/CLI).
+
+When an account-widget identity check or successful web enrichment returns an OAuth profile, its same-token email is
+retained for display even if the profile lacks the organization needed to verify widget ownership. A failed
+optional profile check leaves successful usage available. Ordinary OAuth refreshes still do not request a
+profile solely for display identity, so selecting OAuth alone does not guarantee an Account row. Organization
+UUIDs are ownership evidence, not organization display names.
 
 Admin API key setup:
 - Preferences → Providers → Claude → Admin API key, stored in `~/.codexbar/config.json`.
@@ -106,6 +121,18 @@ the cookie import.
   - `Never prompt`: never attempts interactive Claude OAuth Keychain prompts.
   - `Only on user action` (default): interactive prompts are reserved for user-initiated repair flows.
   - `Always allow prompts`: allows interactive prompts in both user and background flows.
+- Explicit Refresh can repair Claude OAuth Keychain access when direct-read consent is enabled and the policy
+  allows user prompts. Ordinary OAuth fetches remain noninteractive, including with `Always allow prompts`;
+  that policy still governs the existing delegated refresh and experimental reader paths.
+- After a missing-credentials failure, a newer Claude Code credential timestamp replaces the stale error with
+  **Claude Code credentials changed** and a **Refresh** instruction in the menu and OAuth CLI output. Click the
+  existing menu **Refresh** action to retry; direct-read consent and the prompt policy still control access.
+  The freshness probe reads only Keychain attributes with UI disabled and the credentials file's modification
+  time. It never requests the Keychain credential payload, launches Claude, or grants access in the background.
+  A changed timestamp can mean a login or token rotation; it does not prove the credential is valid. Custom
+  credential profiles use their own file timestamp, never the global Claude Code Keychain item. CodexBar saves
+  only the last failure time per profile so the guidance survives restarts and is shared with the bundled CLI;
+  a readable credential clears it. Auto continues to configured CLI/Web sources under their existing access gates.
 - This setting only affects Claude OAuth Keychain prompting behavior; it does not switch your Claude usage source.
 - The policy also applies to the experimental `/usr/bin/security` reader and delegated OAuth refresh through
   `claude`: background operations that can prompt require `Always allow prompts`.
@@ -142,6 +169,8 @@ the cookie import.
   after a rejected cache write, the next refresh first clears the stale persistent entry, then reuses and persists
   an unexpired in-memory credential even after 30 minutes once that cleanup succeeds. Extended reuse requires
   evidence of that exact failed write and its original consent; an unrelated invalidation cannot authorize it.
+  Rejected writes during CodexBar-owned token refresh retain the same recovery, bound to the refreshed credential;
+  a delayed older write cannot replace a newer credential's recovery.
   This does not discover an external login or enable additional background reads of Claude Code's Keychain item.
 - For the default CLI profile, expired cached or file credentials can adopt a fresh CLI Keychain token after file fallback, even when its fingerprint was already observed during an earlier repair. Existing direct-read consent, prompt policy, cooldown, one-minute freshness-check throttle, and noninteractive-read checks still apply. Custom profiles are not recovered from the unscoped global item, and CLI credentials are never rewritten by this synchronization. Background recovery still requires the Always allow prompts policy; the default Only on user action policy requires an explicit Refresh.
 - Credential selection does not rank unrelated sources by the largest `expiresAt`: expiry establishes validity,
@@ -207,6 +236,23 @@ the cookie import.
   (`default_claude_max_5x` / `default_claude_max_20x`), it is surfaced in the label as "Max 5x" / "Max 20x".
 
 ## Web API (cookies)
+- Optional subscription dates come from `GET /api/organizations/{org_id}/subscription_details` on `claude.ai`,
+  using an existing manual or cached session cookie. They do not come from the quota response or OAuth expiry.
+  `next_charge_at` / `next_charge_date` supply renewal; `plan_ending_at` / `plan_ending_before` supply paid-access
+  expiration and take precedence over renewal. Calendar-only dates stay calendar-only when displayed.
+- The menu and Settings preview reuse the shared subscription row. Missing, unavailable, or unrecognized billing
+  data does not invent a date or fail usage. CLI JSON exposes `subscriptionRenewsAt` / `subscriptionExpiresAt`
+  and a corresponding `...IsDateOnly: true` when the server only supplies a calendar date.
+- OAuth enrichment additionally verifies the OAuth profile's account and organization against the cookie session
+  before and after billing. OAuth credentials alone cannot fetch these dates. No cookie discovery, credential
+  repair, sign-in, or new Keychain access is performed for billing; cookie source Off disables it.
+- App and CLI use the same provider fetch and normal account-scoped publication. Billing has a separate two-second
+  total budget after quota succeeds; expiry, errors, or a changed verified owner leave successful quota intact.
+  No delayed billing task writes back into an already published snapshot, and dates are not carried across refreshes.
+- Availability is determined by the authenticated billing response, not the Pro/Max/Team/Enterprise plan label.
+  The fixtures cover the reported subscription schema, including cancellation and absent dates; they do not
+  establish that every plan or organization role can access this endpoint. Team/Enterprise billing access and
+  live cancelled subscriptions remain unverified. Quota resets and Extra usage balances are independent.
 - Session quota warnings ignore a weekly quota promoted into the primary field when the five-hour payload is missing. Existing session warning history stays tied to its account, and weekly warnings continue independently.
 - Preferences → Providers → Claude → Cookie source (Automatic or Manual).
 - Manual mode accepts a `Cookie:` header from a claude.ai request.
@@ -247,10 +293,13 @@ the cookie import.
   - `GET https://claude.ai/api/account` → email + plan hints.
 - Outputs:
   - Session + weekly + model-specific percent used.
-  - A missing session measurement does not render as 100% remaining. Measured weekly and extra windows stay visible; when only a synthetic session placeholder exists, menus and plain CLI output report that limits are unavailable. Raw JSON retains the placeholder for diagnostics.
+  - A missing Web session stays absent instead of becoming a synthetic 0% session; measured weekly and extra windows stay visible. Older cached placeholders remain readable.
   - Daily Routines extra window when returned by the usage API.
-  - Extra usage spend/limit (if enabled).
-  - Remaining Usage credits balance (if enabled).
+  - Extra usage spend/limit (if enabled). Compact Overview keeps this section when no measured quota bars exist, including Enterprise accounts with unavailable limits.
+  - Remaining Usage credits balance (if enabled). Custom menu bar layouts can show it with the **Balance** element
+    beside the quota windows; the default menu bar text keeps showing quota. Turning off **Show credits & extra
+    usage** hides it from the menu card and the Balance element immediately. Otherwise a fresh snapshot without a
+    successful prepaid credits response has no balance, while a failed refresh keeps the last snapshot and its balance.
   - Account email + inferred plan.
   - Limit Reset Credits (see below).
 - A Cloudflare challenge on `claude.ai` is a network-path restriction, not a stale-cookie signal. CodexBar keeps the
@@ -269,14 +318,34 @@ the cookie import.
   - Requires `eligible: true`. A grant with an unreadable `resets_left`, `resets_total`, `paused`, `starts_at`, or
     `ends_at` is dropped. More than 50 available resets or more than 200 grant records show nothing. The usage
     windows are unaffected either way.
-  - Menu: a live `Limit Reset Credits` section behind the global optional credits and extra usage setting. CLI and
-    `codexbar serve`: a `Limit Reset Credits` row in `usage.details` (`N available`, next expiry).
+  - Menu: a live `Limit Reset Credits` section with its own visibility choice. An upgrade preserves a previously
+    disabled global optional-usage preference by initially hiding this section; it can then be enabled independently.
+    CLI and `codexbar serve`: a `Limit Reset Credits` row in `usage.details` (`N available`, next expiry).
   - Live-only: grant IDs are never decoded, the usage request skips the URL cache, and cached or synced snapshots do
     not restore the inventory. A reset used on claude.ai disappears at the next successful refresh.
   - Source precedence stays unchanged: credits appear only from the source supplying the primary usage snapshot. CLI
     does not report saved reset credits, and optional Web enrichment never adds Web credits to another source,
     even when the account matches. The menu replaces the generic details row with one shared reset-credit section.
     CodexBar never redeems a reset; use Claude on the web or Claude Desktop.
+
+Enterprise spend details depend on the selected source. Auto stops at the first successful OAuth/CLI/Web result;
+it does not import a missing monthly spend cap from a different session. Select **Web API (cookies)** for
+browser-only billing details, and enable **Show credits and extra usage** to display them.
+
+## Extra usage rollover
+
+For Claude spend-only accounts, positive monthly caps use the shared usage-window presentation: one Meter bar,
+with Auto, Extra usage, and the card using the same cap percentage and reset. The card retains its spend/limit and
+prepaid-balance caption. Accounts with quota windows keep their separate Extra usage section, including in the
+menu-card-sections layout. Uncapped balances keep their compact Credits row; Admin API spend is unchanged.
+Extra usage still follows its existing visibility choice and the global optional-usage switch. Pace follows the
+existing pace setting, independently of redeemable Limit Reset Credits.
+
+Claude does not report the cap reset. CodexBar infers midnight UTC on the first of the next month from the cost
+observation, applying [Anthropic's documented spend-limit period](https://platform.claude.com/docs/en/manage-claude/spend-limits-api)
+to all Claude monthly caps. Reset text uses local time (November 1 UTC can appear as October 31 in the Americas);
+the metric tooltip identifies the inference. Shared calendar-month pace uses the actual 28–31-day month.
+Changing a cap changes the percentage, not its rollover. A stale observation does not advance into a new month.
 
 ## Cloud-session credits
 
@@ -408,11 +477,13 @@ Model-scoped weekly-window proof (synthetic data, no real accounts or credential
 
 ## CLI PTY (fallback)
 - Runs `claude` in a PTY session (`ClaudeCLISession`).
+- The PTY and replay screen share a 160-column, 200-row viewport so tall inline `/usage` panels retain their session,
+  weekly, and model-specific quotas alongside session statistics and usage insights. Erased content remains discarded.
 - The bundled watchdog is discovered only in the running executable's resolved app bundle; launching through a CLI symlink preserves that association.
 - Default behavior: exit after each probe; Debug → "Keep CLI sessions alive" keeps it running between probes.
-- Both PTY probes and the non-PTY `/usage` fallback pass `--settings '{"remoteControlAtStartup":false}'` to disable Remote Control startup for the probe process. This process-local override leaves the user's saved settings unchanged; Claude's managed-settings policy still applies.
+- Both PTY probes and the non-PTY `/usage` fallback pass `--settings '{"remoteControlAtStartup":false,"disableAllHooks":true}'` to disable Remote Control startup and user hooks for the probe process. This process-local override leaves the user's saved settings unchanged; Claude's managed-settings policy still applies.
 - Both launches use `--strict-mcp-config` to skip the user's configured MCP servers. Saved nonessential-traffic restrictions remain in force.
-- A PTY timeout or usage-loading failure can trigger the non-PTY `/usage` fallback. Cancellation and rate limits stop the probe; a subscription-only notice from the fallback takes precedence over the original PTY failure.
+- A PTY timeout or usage-loading failure can trigger the non-PTY `/usage` fallback. Cancellation and rate limits stop the probe; a subscription-only notice from the fallback takes precedence over the original PTY failure. An insights-only report is not evidence that the account lacks quotas: it preserves the original PTY failure, which is also logged before fallback.
 - Transient CLI timeouts and loading stalls preserve availability already established for that account, so a later
   Auto refresh can retry CLI instead of stopping at missing OAuth credentials. They do not establish availability
   for a previously unverified account; the existing Keychain and prompt policies still apply.
@@ -447,7 +518,8 @@ Model-scoped weekly-window proof (synthetic data, no real accounts or credential
   - Surfaces CLI errors (e.g. token expired) directly.
   - Some Education and organization-managed subscriptions return only a subscription notice, with no numeric
     session or weekly quota fields. CodexBar reports those limits as unavailable, keeps local cost/token history
-    visible, and never derives quota percentages from spend or token totals.
+    visible, and never derives quota percentages from spend or token totals. Logs and diagnostics classify this as
+    a configuration issue and recommend checking the provider source/settings, rather than re-authenticating.
 
 ## Cost usage (local log scan)
 - Source roots:
@@ -489,6 +561,7 @@ Model-scoped weekly-window proof (synthetic data, no real accounts or credential
   - A pricing catalog replacement during a refresh preserves certification of the parsed transcript window. The next refresh applies the replacement prices to cached rows without reparsing unchanged transcripts, including after a restart. Externally replaced transcript caches still require window certification again.
   - Unchanged sources reuse the memo even when a menu refresh bypasses the scan debounce. Explicit rescans still reparse transcripts, but identical cache and report-memo content is not rewritten; an unchanged rebuild retains its previous scan timestamp. Existing artifacts may be rewritten once to establish deterministic key ordering. Changed transcripts or report metadata still replace the corresponding complete JSON artifacts.
   - Persistence keeps at most eight lightweight artifact identities independently of the decoded-row cache. An unchanged cache identity plus matching device/inode, size, and nanosecond mtime skips encoding; otherwise sorted JSON fingerprints avoid full-file read-back while preserving identical rebuilds. External replacement invalidates reuse, and changed files still use temporary-file rename. Evicted identities are re-established on load or the next save.
+  - On clone-capable macOS volumes, changed Claude/Vertex cache and report-memo artifacts clone the previous file into a private temporary sibling and write only different blocks before atomic replacement. Linux and unsupported volumes use full writes. JSON schemas and filenames stay unchanged; serialized length changes can still rewrite large suffixes. See the [synthetic write-amplification proof](research/cost-history-write-amplification-2026-10-09.md).
   - Decoded cache artifacts can be reused in memory while their canonical path, file identity, size, and nanosecond modification time match. Schema and time-zone checks still run on every load; report-level source, window, filter, and pricing checks still run separately. Atomic replacements invalidate this reuse, and explicit rescans still reparse source transcripts.
   - Successful cache saves retain the just-written decoded value, avoiding another full row decode on the next changed refresh. Unmodified loaded values skip encoding and writing while the artifact stamp still matches; external replacements, deleted files, and failed or cancelled saves cannot establish this reuse. Changed content still replaces the complete JSON artifact. Compact row field names reduce its size; schema 3 artifacts rebuild from transcripts once when the rows are next needed. Report memos and user-facing JSON retain their existing formats.
   - The app's Usage & Spend refresh uses `claude-history-v6.json` and its own report memo. The two app refreshes do not replace each other's retained rows or restart each other's transcript scans. Once both have established their windows, same-day append refreshes read changed tails once per cache.
@@ -506,3 +579,11 @@ Model-scoped weekly-window proof (synthetic data, no real accounts or credential
   `Sources/CodexBarCore/PiSessionCostScanner.swift`,
   `Sources/CodexBarCore/PiSessionCostCache.swift`,
   `Sources/CodexBarCore/Vendored/CostUsage/*`
+
+### Displaying resets and billing details
+
+Saved limit resets are independent of the global optional billing switch. Use **Visible usage items →
+Limit Reset Credits** to hide them. **Extra usage** and **Cloud credits** have individual checkboxes but
+also require the global optional billing switch. A prepaid balance without a monthly cap uses the same
+Extra usage choice, labeled **Credits** while that balance is reported. **Plan renewal / expiry** is independent and appears
+below Session/Weekly, before saved resets. These controls affect presentation only.

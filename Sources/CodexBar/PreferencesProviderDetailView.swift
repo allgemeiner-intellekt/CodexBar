@@ -8,16 +8,23 @@ enum ProviderMetricInlinePresentation: Equatable {
 
 @MainActor
 struct ProviderDetailView<SupplementaryContent: View>: View {
+    private struct ModelLimitsIdentity: Hashable {
+        let id: String
+        let scope: ProviderModelRateLimitScope?
+    }
+
     let provider: UsageProvider
     @Bindable var store: UsageStore
     @Binding var isEnabled: Bool
     let subtitle: String
     let model: UsageMenuCardView.Model
+    let accountUsageOverview: ProviderAccountUsageOverview?
     let usageItems: [ProviderUsageItemDescriptor]
     let openAIWebDiagnostic: String?
     let settingsPickers: [ProviderSettingsPickerDescriptor]
     let settingsToggles: [ProviderSettingsToggleDescriptor]
     let settingsFields: [ProviderSettingsFieldDescriptor]
+    let settingsModelLimits: [ProviderSettingsModelLimitsDescriptor]
     let settingsDirectoryLists: [ProviderSettingsDirectoryListDescriptor]
     let settingsActions: [ProviderSettingsActionsDescriptor]
     let settingsTokenAccounts: ProviderSettingsTokenAccountsDescriptor?
@@ -35,12 +42,14 @@ struct ProviderDetailView<SupplementaryContent: View>: View {
         isEnabled: Binding<Bool>,
         subtitle: String,
         model: UsageMenuCardView.Model,
+        accountUsageOverview: ProviderAccountUsageOverview? = nil,
         usageItems: [ProviderUsageItemDescriptor] = [],
         openAIWebDiagnostic: String?,
         settingsPickers: [ProviderSettingsPickerDescriptor],
         settingsToggles: [ProviderSettingsToggleDescriptor],
         settingsFields: [ProviderSettingsFieldDescriptor],
         settingsDirectoryLists: [ProviderSettingsDirectoryListDescriptor] = [],
+        settingsModelLimits: [ProviderSettingsModelLimitsDescriptor] = [],
         settingsActions: [ProviderSettingsActionsDescriptor] = [],
         settingsTokenAccounts: ProviderSettingsTokenAccountsDescriptor?,
         settingsOrganizations: ProviderSettingsOrganizationsDescriptor? = nil,
@@ -56,12 +65,14 @@ struct ProviderDetailView<SupplementaryContent: View>: View {
         self._isEnabled = isEnabled
         self.subtitle = subtitle
         self.model = model
+        self.accountUsageOverview = accountUsageOverview
         self.usageItems = usageItems
         self.openAIWebDiagnostic = openAIWebDiagnostic
         self.settingsPickers = settingsPickers
         self.settingsToggles = settingsToggles
         self.settingsFields = settingsFields
         self.settingsDirectoryLists = settingsDirectoryLists
+        self.settingsModelLimits = settingsModelLimits
         self.settingsActions = settingsActions
         self.settingsTokenAccounts = settingsTokenAccounts
         self.settingsOrganizations = settingsOrganizations
@@ -105,17 +116,10 @@ struct ProviderDetailView<SupplementaryContent: View>: View {
             return nil
         }
         let presentation = ProviderDescriptorRegistry.descriptor(for: provider).presentation.planRow
-        guard presentation.stripsBalancePrefix else {
-            return (label: L(presentation.label), value: rawPlan)
-        }
-
-        let prefix = "Balance:"
-        if rawPlan.hasPrefix(prefix) {
-            let valueStart = rawPlan.index(rawPlan.startIndex, offsetBy: prefix.count)
-            let trimmedValue = rawPlan[valueStart...].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedValue.isEmpty {
-                return (label: L(presentation.balancePrefixedLabel), value: trimmedValue)
-            }
+        if presentation.stripsBalancePrefix,
+           let value = MenuBarDisplayText.prefixedValue(from: rawPlan, prefix: "Balance:")
+        {
+            return (label: L(presentation.balancePrefixedLabel), value: value)
         }
         return (label: L(presentation.label), value: rawPlan)
     }
@@ -143,18 +147,44 @@ struct ProviderDetailView<SupplementaryContent: View>: View {
                     store: self.store,
                     isEnabled: self.isEnabled,
                     versionText: Self.versionText(provider: self.provider, store: self.store),
-                    model: self.model)
+                    model: self.model,
+                    showsAccountInfo: self.accountUsageOverview == nil)
             }
 
-            Section {
-                ProviderMetricsInlineView(
+            if let overview = self.accountUsageOverview {
+                ProviderAccountUsageOverviewView(
                     provider: self.provider,
-                    model: self.model,
-                    openAIWebDiagnostic: self.openAIWebDiagnostic,
-                    isEnabled: self.isEnabled,
-                    isRefreshing: self.store.refreshingProviders.contains(self.provider.instanceID))
-            } header: {
-                Text(L("Usage"))
+                    overview: overview,
+                    isEnabled: self.isEnabled)
+                if let tokenUsage = self.model.tokenUsage {
+                    Section {
+                        ProviderTokenUsageInlineView(provider: self.provider, tokenUsage: tokenUsage)
+                    } header: {
+                        Text(L(self.store.settings.codexLocalSessionCostLedgerEnabled ? "This Mac" : "Local usage"))
+                    } footer: {
+                        SettingsSectionFooter(L(self.store.settings.codexLocalSessionCostLedgerEnabled
+                                ? "Local usage is shared across accounts on this Mac."
+                                : "Local usage comes from the current Codex profile."))
+                    }
+                }
+                if let diagnostic = self.openAIWebDiagnostic {
+                    Section {
+                        Text(diagnostic).font(.footnote).foregroundStyle(.secondary)
+                    } header: {
+                        Text(L("OpenAI web extras"))
+                    }
+                }
+            } else {
+                Section {
+                    ProviderMetricsInlineView(
+                        provider: self.provider,
+                        model: self.model,
+                        openAIWebDiagnostic: self.openAIWebDiagnostic,
+                        isEnabled: self.isEnabled,
+                        isRefreshing: self.store.refreshingProviders.contains(self.provider.instanceID))
+                } header: {
+                    Text(L("Usage"))
+                }
             }
 
             if !self.usageItems.isEmpty {
@@ -164,7 +194,7 @@ struct ProviderDetailView<SupplementaryContent: View>: View {
                     items: self.usageItems)
             }
 
-            if let errorDisplay {
+            if self.accountUsageOverview == nil, let errorDisplay {
                 Section {
                     ProviderErrorView(
                         title: String(
@@ -217,6 +247,11 @@ struct ProviderDetailView<SupplementaryContent: View>: View {
                 ProviderSettingsDirectoryListRowView(descriptor: descriptor)
             }
 
+            ForEach(self.settingsModelLimits) { descriptor in
+                ProviderSettingsModelLimitsRowView(descriptor: descriptor)
+                    .id(ModelLimitsIdentity(id: descriptor.id, scope: descriptor.scope))
+            }
+
             if let organizations = self.settingsOrganizations {
                 ProviderSettingsOrganizationsRowView(descriptor: organizations)
             }
@@ -262,7 +297,14 @@ struct ProviderUsageItemVisibilitySettingsView: View {
                                 itemID: item.id,
                                 for: self.provider)
                         })) {
-                    Text(item.title)
+                    VStack(alignment: .leading) {
+                        Text(item.title)
+                        if item.requiresOptionalUsage, !self.settings.showOptionalCreditsAndExtraUsage {
+                            Text(L("Hidden by the global optional credits, spending & billing setting."))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .toggleStyle(.checkbox)
             }
@@ -360,19 +402,24 @@ struct ProviderDetailInfoRows: View {
     let isEnabled: Bool
     let versionText: String?
     let model: UsageMenuCardView.Model
+    var showsAccountInfo: Bool = true
 
     var body: some View {
-        ProviderDetailInfoRow(label: L("Source"), value: self.store.sourceLabel(for: self.provider))
+        if self.showsAccountInfo {
+            ProviderDetailInfoRow(label: L("Source"), value: self.store.sourceLabel(for: self.provider))
+        }
         if let versionText {
             ProviderDetailInfoRow(label: L("Version"), value: versionText)
         }
-        ProviderDetailInfoRow(label: L("Updated"), value: self.updatedText)
+        if self.showsAccountInfo {
+            ProviderDetailInfoRow(label: L("Updated"), value: self.updatedText)
+        }
 
         if let status = self.store.status(for: self.provider) {
             ProviderDetailInfoRow(label: L("Status"), value: status.description ?? status.indicator.label)
         }
 
-        if !self.model.email.isEmpty {
+        if self.showsAccountInfo, !self.model.email.isEmpty {
             ProviderDetailInfoRow(label: L("Account"), value: self.model.email)
         }
 
@@ -384,7 +431,7 @@ struct ProviderDetailInfoRows: View {
             ProviderDetailInfoRow(label: L("Auth"), value: authMethod)
         }
 
-        if let planRow = ProviderDetailView<EmptyView>.planRow(
+        if self.showsAccountInfo, let planRow = ProviderDetailView<EmptyView>.planRow(
             provider: self.provider,
             planText: self.model.planText)
         {
@@ -534,16 +581,7 @@ struct ProviderMetricsInlineView: View {
             }
 
             if let tokenUsage = self.model.tokenUsage {
-                ProviderMetricInlineTextRow(
-                    title: UsageMenuCardView.Model.tokenUsageHeader(provider: self.model.provider),
-                    value: tokenUsage.sessionLine)
-                ProviderMetricInlineTextRow(title: "", value: tokenUsage.monthLine)
-                if ProviderDescriptorRegistry.descriptor(for: self.model.provider).tokenCost.showsHintInProviderDetails,
-                   let hint = tokenUsage.hintLine,
-                   !hint.isEmpty
-                {
-                    ProviderMetricInlineTextRow(title: "", value: hint)
-                }
+                ProviderTokenUsageInlineView(provider: self.model.provider, tokenUsage: tokenUsage)
             }
 
             if contentState.hasProviderDetails {
@@ -573,6 +611,23 @@ struct ProviderMetricsInlineView: View {
             return L("Refreshing")
         }
         return modelPlaceholder.map(L) ?? L("No usage yet")
+    }
+}
+
+struct ProviderTokenUsageInlineView: View {
+    let provider: UsageProvider
+    let tokenUsage: UsageMenuCardView.Model.TokenUsageSection
+
+    var body: some View {
+        ProviderMetricInlineTextRow(
+            title: UsageMenuCardView.Model.tokenUsageHeader(provider: self.provider),
+            value: self.tokenUsage.sessionLine)
+        ProviderMetricInlineTextRow(title: "", value: self.tokenUsage.monthLine)
+        if ProviderDescriptorRegistry.descriptor(for: self.provider).tokenCost.showsHintInProviderDetails,
+           let hint = self.tokenUsage.hintLine, !hint.isEmpty
+        {
+            ProviderMetricInlineTextRow(title: "", value: hint)
+        }
     }
 }
 

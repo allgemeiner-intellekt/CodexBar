@@ -89,6 +89,7 @@ struct CostUsageStoreReadWorkTests {
             daily: full.daily,
             projects: retainedReport ? [] : full.projects,
             sessions: retainedReport ? [] : full.sessions,
+            detailsAreComplete: full.detailsAreComplete && !retainedReport,
             updatedAt: fixture.now.addingTimeInterval(retainedReport ? -60 : 0))
     }
 
@@ -659,12 +660,20 @@ struct CostUsageStoreReadWorkTests {
         defer { fixture.remove() }
         let status = await CostUsageFetcher(scannerOptions: fixture.options).codexScanCatchUpStatus()
         fixture.expectStatus(status)
+        let confirmed = await CostUsageFetcher(scannerOptions: fixture.options)
+            .codexScanCatchUpStatus(historyDays: 1, now: fixture.now)
+        #expect(confirmed.completionIsConfirmed == !incomplete)
+        let tooWide = await CostUsageFetcher(scannerOptions: fixture.options)
+            .codexScanCatchUpStatus(historyDays: 365, now: fixture.now)
+        #expect(!tooWide.completionIsConfirmed)
         try await fixture.expectSnapshot(fixture.cachedSnapshot())
 
         var otherScope = fixture.options
         otherScope.codexSessionsRoot = fixture.env.root.appendingPathComponent("other-home/sessions")
         let rejected = await CostUsageFetcher(scannerOptions: otherScope).codexScanCatchUpStatus()
         #expect(rejected == .init(pending: false, progressKey: "scope-mismatch"))
+        #expect(!rejected.completionIsConfirmed)
+        #expect(!rejected.historyCoverageIsEstablished)
         #expect(await fixture.cachedSnapshot(options: otherScope) == nil)
         #expect(await fixture.cachedSnapshot(historyDays: 365) == nil)
 
@@ -866,6 +875,7 @@ struct ReadWorkFixture {
     func expectSnapshot(_ result: CostUsageFetcher.CachedCodexTokenSnapshotResult?, details: Bool = false) throws {
         let result = try #require(result)
         #expect(result.snapshot.historyCoverageIsEstablished == !self.incomplete)
+        #expect(result.snapshot.detailsAreComplete == (details && !self.incomplete))
         #expect(result.snapshot.last30DaysTokens == self.rowCount * 13)
         #expect(result.snapshot.sessionTokens == self.rowCount * 13)
         #expect(result.snapshot.daily.count == 1)

@@ -73,6 +73,7 @@ extension ProviderInstanceID {
     public static let aiand = UsageProvider.aiand.instanceID
     public static let zoommate = UsageProvider.zoommate.instanceID
     public static let xai = UsageProvider.xai.instanceID
+    public static let xapi = UsageProvider.xapi.instanceID
     public static let notion = UsageProvider.notion.instanceID
     public static let ibmbob = UsageProvider.ibmbob.instanceID
     public static let nous = UsageProvider.nous.instanceID
@@ -94,6 +95,18 @@ extension ProviderInstanceID {
     public static let museai = UsageProvider.museai.instanceID
     public static let lithosai = UsageProvider.lithosai.instanceID
     public static let workbuddy = UsageProvider.workbuddy.instanceID
+    public static let tavily = UsageProvider.tavily.instanceID
+    public static let linkup = UsageProvider.linkup.instanceID
+    public static let tinyapi = UsageProvider.tinyapi.instanceID
+    public static let exa = UsageProvider.exa.instanceID
+    public static let cosmic = UsageProvider.cosmic.instanceID
+    public static let aerostack = UsageProvider.aerostack.instanceID
+    public static let sailresearch = UsageProvider.sailresearch.instanceID
+    public static let sofya = UsageProvider.sofya.instanceID
+    public static let fal = UsageProvider.fal.instanceID
+    public static let flora = UsageProvider.flora.instanceID
+    public static let parallel = UsageProvider.parallel.instanceID
+    public static let claudeplatform = UsageProvider.claudeplatform.instanceID
 }
 
 // swiftformat:enable sortDeclarations

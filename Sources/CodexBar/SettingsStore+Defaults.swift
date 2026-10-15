@@ -298,6 +298,11 @@ extension SettingsStore {
         set { self.setDefault(\.providerChangelogLinksEnabled, newValue, key: "providerChangelogLinksEnabled") }
     }
 
+    var highlightMenuCardsOnHover: Bool {
+        get { self.defaultsState.highlightMenuCardsOnHover }
+        set { self.setDefault(\.highlightMenuCardsOnHover, newValue, key: "highlightMenuCardsOnHover") }
+    }
+
     var menuBarShowsBrandIconWithPercent: Bool {
         get { self.defaultsState.menuBarShowsBrandIconWithPercent }
         set { self.setDefault(\.menuBarShowsBrandIconWithPercent, newValue, key: "menuBarShowsBrandIconWithPercent") }
@@ -311,6 +316,16 @@ extension SettingsStore {
     var menuBarColorPace: Bool {
         get { self.defaultsState.menuBarColorPace }
         set { self.setDefault(\.menuBarColorPace, newValue, key: "menuBarColorPace") }
+    }
+
+    var menuBarPaceReservePositive: Bool {
+        get { self.defaultsState.menuBarPaceReservePositive }
+        set { self.setDefault(\.menuBarPaceReservePositive, newValue, key: "menuBarPaceReservePositive") }
+    }
+
+    var menuBarColorByProvider: Bool {
+        get { self.defaultsState.menuBarColorByProvider }
+        set { self.setDefault(\.menuBarColorByProvider, newValue, key: "menuBarColorByProvider") }
     }
 
     var menuBarHighContrastOnInactiveDisplays: Bool {
@@ -477,6 +492,7 @@ extension SettingsStore {
     private func persistMenuBarLayout(_ layout: MenuBarLayout) {
         guard let blobs = try? MenuBarLayoutPersistence.encoded(layout) else { return }
         self.userDefaults.set(blobs.current, forKey: MenuBarLayoutUserDefaultsKey.layoutCurrent)
+        self.userDefaults.set(blobs.v4, forKey: MenuBarLayoutUserDefaultsKey.layoutV4)
         self.userDefaults.set(blobs.v3, forKey: MenuBarLayoutUserDefaultsKey.layoutV3)
         self.userDefaults.set(blobs.released, forKey: MenuBarLayoutUserDefaultsKey.layoutReleased)
         self.userDefaults.set(blobs.legacy, forKey: MenuBarLayoutUserDefaultsKey.layout)
@@ -487,6 +503,7 @@ extension SettingsStore {
             .encodedLibrary(self.defaultsState.menuBarLayoutConditionals)
         else { return }
         self.userDefaults.set(blobs.current, forKey: MenuBarLayoutUserDefaultsKey.conditionalsCurrent)
+        self.userDefaults.set(blobs.v4, forKey: MenuBarLayoutUserDefaultsKey.conditionalsV4)
         self.userDefaults.set(blobs.v3, forKey: MenuBarLayoutUserDefaultsKey.conditionalsV3)
         self.userDefaults.set(blobs.released, forKey: MenuBarLayoutUserDefaultsKey.conditionalsReleased)
         self.userDefaults.set(blobs.legacy, forKey: MenuBarLayoutUserDefaultsKey.conditionals)
@@ -496,6 +513,7 @@ extension SettingsStore {
         guard let blobs = try? MenuBarLayoutPersistence.encodedOverrides(self.defaultsState.menuBarLayoutOverridesRaw)
         else { return }
         self.userDefaults.set(blobs.current, forKey: MenuBarLayoutUserDefaultsKey.overridesCurrent)
+        self.userDefaults.set(blobs.v4, forKey: MenuBarLayoutUserDefaultsKey.overridesV4)
         self.userDefaults.set(blobs.v3, forKey: MenuBarLayoutUserDefaultsKey.overridesV3)
         self.userDefaults.set(blobs.released, forKey: MenuBarLayoutUserDefaultsKey.overridesReleased)
         self.userDefaults.set(blobs.legacy, forKey: MenuBarLayoutUserDefaultsKey.overrides)
@@ -625,8 +643,19 @@ extension SettingsStore {
     }
 
     var menuBarShowsHighestUsage: Bool {
-        get { self.defaultsState.menuBarShowsHighestUsage }
-        set { self.setDefault(\.menuBarShowsHighestUsage, newValue, key: "menuBarShowsHighestUsage") }
+        get { self.unifiedIconSource == .highestUsage }
+        set { self.unifiedIconSource = newValue ? .highestUsage : .currentSelection }
+    }
+
+    var unifiedIconSource: UnifiedIconSource {
+        get {
+            self.defaultsState.unifiedIconSourceRaw.flatMap(UnifiedIconSource.init(rawValue:))
+                ?? (self.defaultsState.menuBarShowsHighestUsage ? .highestUsage : .currentSelection)
+        }
+        set {
+            self.setDefault(\.unifiedIconSourceRaw, newValue.rawValue, key: "unifiedIconSource")
+            self.setDefault(\.menuBarShowsHighestUsage, newValue == .highestUsage, key: "menuBarShowsHighestUsage")
+        }
     }
 
     var claudeOAuthKeychainPromptMode: ClaudeOAuthKeychainPromptMode {
@@ -1045,7 +1074,10 @@ extension SettingsStore {
     /// order, so turning it on sorts the display without losing the user's hand-arranged sequence.
     var providersSortedAlphabetically: Bool {
         get { self.defaultsState.providersSortedAlphabetically }
-        set { self.setDefault(\.providersSortedAlphabetically, newValue, key: "providersSortedAlphabetically") }
+        set {
+            if newValue != self.providersSortedAlphabetically { self.providerOrderUndo?.restoreAlphabetical = nil }
+            self.setDefault(\.providersSortedAlphabetically, newValue, key: "providersSortedAlphabetically")
+        }
     }
 
     var appLanguage: String {

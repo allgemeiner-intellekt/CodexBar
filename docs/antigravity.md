@@ -34,13 +34,24 @@ login still needs the app's OAuth client or the explicit client environment over
 expose the generated token (1.1.28, 1.2.0, and 1.2.1 answer the same request with `200`). When the selected
 executable reports 1.2.2 or later, CodexBar still spends its bounded warm-reuse check but does not spawn a
 managed session or wait for its readiness deadline. Unknown versions keep the managed spawn.
+The legacy gate and ambient or account-scoped print fallback share one `agy --version` result per refresh,
+including unknown versions and probe failures. Each later refresh probes again; successful warm reuse needs
+no version subprocess. On the CSRF-gated fallback, CLI launches drop from three to two: one version check
+and one usage report, without caching across accounts or refreshes.
 
 For `agy` 1.2.2 and later, a failed legacy HTTPS fetch can fall back to
 `agy -p /usage --output-format json`. CodexBar checks that the same executable reports version 1.1.11
 or later before using print mode; [Google introduced non-interactive usage reports in 1.1.11](https://antigravity.google/changelog).
 It requires a successful `usage` command report with known,
 enabled quota buckets, bounds the command to 90 seconds and its output to 1 MiB, and terminates the command
-on cancellation. It runs in a private empty directory and does not send a model prompt or parse TUI output.
+on cancellation. It runs in a private temporary directory and does not send a model prompt or parse TUI output.
+When silent sign-in fails, `agy` print mode can exec `open` or `xdg-open` from `PATH` to start Google OAuth.
+Each print probe puts failing launchers in its existing private directory, prepends that directory to `PATH`,
+and points `BROWSER` at the failing launcher. If the launchers cannot be installed, the report does not start.
+Automatic and manual usage refreshes can still retrieve quota with a working login, but cannot open browser
+sign-in through these launchers. A failed login returns a sign-in or timeout error; run `agy` in a terminal
+to sign in again. **Add Account...** keeps its explicit OAuth login flow. The launchers are removed with the
+probe directory after subprocess cleanup, including failure and cancellation.
 Each print probe receives a fresh `CODEXBAR_PROBE_OWNER` environment marker. On completion, timeout, or
 cancellation, CodexBar stops its process group and reaps same-user processes that still carry that exact marker,
 including detached MCP servers. Ownership and process start identity are checked again before each signal;
@@ -55,7 +66,7 @@ On macOS, Auto can also run the print command for a selected or injected Google 
 its credentials into a temporary `0700` home with a `0600` token file, then runs `agy` with only PATH,
 locale, temporary-directory, and proxy settings inherited. `SSH_TTY` selects agy's file-token storage,
 keeping the ambient CLI login and Keychain untouched. Credentials without an ID token are supported;
-`agy` can refresh an expired grant in that temporary home without starting a login.
+`agy` can silently refresh an expired grant in that temporary home; if that fails, the same browser-launch guard applies.
 
 Before attributing usage, CodexBar checks the effective access token through Google's userinfo endpoint
 and rejects a different or unverifiable account, including conflicting refreshed ID-token claims.
@@ -141,7 +152,8 @@ be polled within the readiness deadline.
 
 - OAuth refresh form-encodes credential values, preserving literal plus signs, separators, and percent escapes.
 - Login still uses Antigravity's Google OAuth client, discovered from `Antigravity.app` or overridden with `ANTIGRAVITY_OAUTH_CLIENT_ID` and `ANTIGRAVITY_OAUTH_CLIENT_SECRET`.
-- Discovery reads the ID and secret initialized together in the language server's OAuth configuration. Antigravity 2.19.1 on Apple Silicon and Intel stores two clients in separately pooled strings; their order does not identify a pair. The first recognized configuration record wins deterministically. Older artifacts with a single pair remain supported; ambiguous artifacts without a recognized record are rejected.
+- Discovery reads the ID and secret initialized together in the language server's OAuth configuration. Antigravity 2.19.1 on Apple Silicon and Intel stores two clients in separately pooled strings; their order does not identify a pair. Among recognized records, CodexBar prefers the client used by agy's consumer sign-in, then falls back to the first matched record. Older artifacts with a single pair remain supported; ambiguous artifacts without a recognized record are rejected.
+- Accounts previously signed in with the other client may receive `GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT` with no current tier or project. Without a saved project, CodexBar asks you to sign in again instead of displaying placeholder 100% quotas. Refresh tokens remain bound to their original client; discovery does not migrate an existing grant. The Hub request User-Agent is independent of this OAuth client selection.
 - If discovery fails or Google rejects the client with `invalid_client`, update Antigravity or set both overrides to a matching client ID and secret before retrying. These failures do not add or replace a saved account.
 - A successful login writes the latest shared credentials to `~/.codexbar/antigravity/oauth_creds.json` and upserts a token-account entry for the Google account.
 - Each token-account entry stores serialized `AntigravityOAuthCredentials` and is injected into remote fetches through `ANTIGRAVITY_OAUTH_CREDENTIALS_JSON`.

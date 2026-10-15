@@ -1,5 +1,4 @@
 import AppKit
-import Charts
 import CodexBarCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -98,27 +97,6 @@ func spendDashboardHourlyChartAccessibilityValue(hourCount: Int, serviceCount: I
     }
 }
 
-func spendDashboardHourlyPointAccessibilityLabel(
-    providerName: String,
-    hour: Date,
-    timeZone: TimeZone,
-    includeDate: Bool,
-    locale: Locale = codexBarLocalizedLocale()) -> String
-{
-    var timeStyle = Date.FormatStyle().hour().minute().locale(locale)
-    timeStyle.timeZone = timeZone
-    var time = hour.formatted(timeStyle)
-    if let abbreviation = timeZone.abbreviation(for: hour), !abbreviation.isEmpty {
-        time = "\(time) \(abbreviation)"
-    }
-    guard includeDate else {
-        return "\(providerName), \(time)"
-    }
-    var dayStyle = Date.FormatStyle().month(.abbreviated).day().locale(locale)
-    dayStyle.timeZone = timeZone
-    return "\(providerName), \(hour.formatted(dayStyle)), \(time)"
-}
-
 func codexCostCatchUpProgressText(_ activity: CodexCostCatchUpActivity) -> String {
     if activity.totalBytes > 0 {
         let processed = ByteCountFormatter.string(
@@ -136,22 +114,6 @@ func codexCostCatchUpProgressText(_ activity: CodexCostCatchUpActivity) -> Strin
     return L("Loading…")
 }
 
-enum SpendDashboardModelHistoryPresentation: Equatable {
-    case unavailable
-    case empty
-    case partial
-    case complete
-}
-
-func spendDashboardModelHistoryPresentation(
-    _ group: SpendDashboardModel.CurrencyGroup) -> SpendDashboardModelHistoryPresentation
-{
-    if group.models.isEmpty {
-        return group.modelHistoryCompleteness == .incomplete ? .unavailable : .empty
-    }
-    return group.modelHistoryCompleteness == .incomplete ? .partial : .complete
-}
-
 @MainActor
 struct SpendDashboardPane: View {
     @Bindable var settings: SettingsStore
@@ -159,6 +121,7 @@ struct SpendDashboardPane: View {
     @State private var isVisible = false
     @State private var userSelectedBackground = false
     @State private var isDataControlsExpanded = true
+    @State private var detailSelections: [String: SpendDashboardDetailSection] = [:]
 
     init(settings: SettingsStore, store: UsageStore) {
         self.settings = settings
@@ -226,6 +189,15 @@ struct SpendDashboardPane: View {
 
     private var controller: SpendDashboardController {
         self.store.sharedSpendDashboardController()
+    }
+
+    private var detailCurrency: String {
+        let preferred = self.controller.configuration?.preferredCurrencyCode ?? "auto"
+        return preferred == "auto" ? "USD" : preferred
+    }
+
+    private func detailSelection(for currency: String) -> Binding<SpendDashboardDetailSection> {
+        Binding(get: { self.detailSelections[currency] ?? .providers }, set: { self.detailSelections[currency] = $0 })
     }
 
     var header: some View {
@@ -425,6 +397,28 @@ struct SpendDashboardPane: View {
 
     @ViewBuilder
     private var content: some View {
+        if self.settings.costUsageEnabled,
+           let configuration = self.controller.configuration,
+           let currency = spendDashboardCodexDetailPlaceholderCurrency(
+               configuration: configuration,
+               currencyCodes: self.controller.model.groups.map(\.currencyCode))
+        {
+            SpendDashboardDetailPanel(
+                group: .init(
+                    currencyCode: currency,
+                    providers: [],
+                    models: [],
+                    dailyPoints: [],
+                    totalTokens: nil,
+                    totalCost: nil,
+                    coveredDayCount: 0,
+                    chartDomain: Date.distantPast...Date.distantPast,
+                    modelHistoryCompleteness: .incomplete,
+                    timeZone: self.controller.configuration?.bucketCalendar.timeZone ?? .current),
+                hidePersonalInfo: self.settings.hidePersonalInfo,
+                supportsCodexDetails: true,
+                selection: self.detailSelection(for: currency))
+        }
         if !self.settings.costUsageEnabled {
             SpendDashboardPanel {
                 ContentUnavailableView {
@@ -450,6 +444,10 @@ struct SpendDashboardPane: View {
                     group: group,
                     requestedDays: self.controller.model.requestedDays,
                     hidePersonalInfo: self.settings.hidePersonalInfo,
+                    detailSelection: self.detailSelection(for: group.id),
+                    supportsCodexDetails: self.controller.configuration?.supportsCodexDetails == true
+                        && (group.currencyCode == "USD" || group.currencyCode == self.detailCurrency),
+                    onSelectDay: { self.controller.selectDay($0) },
                     onClearSelectedDay: {
                         self.controller.selectDay(nil)
                     })
@@ -598,19 +596,29 @@ enum SpendDashboardDetailSection: Hashable, Identifiable {
     }
 }
 
+func spendDashboardCodexDetailPlaceholderCurrency(
+    configuration: SpendDashboardConfiguration,
+    currencyCodes: [String]) -> String?
+{
+    guard configuration.supportsCodexDetails else { return nil }
+    let currency = configuration.preferredCurrencyCode == "auto" ? "USD" : configuration.preferredCurrencyCode
+    return currencyCodes.contains("USD") || currencyCodes.contains(currency) ? nil : currency
+}
+
 func spendDashboardAvailableDetailSections(
     hasProjects: Bool,
     hasSessions: Bool,
-    hasChats: Bool = false) -> [SpendDashboardDetailSection]
+    hasChats: Bool = false,
+    supportsCodexDetails: Bool = false) -> [SpendDashboardDetailSection]
 {
     var sections: [SpendDashboardDetailSection] = [.providers]
-    if hasProjects {
+    if supportsCodexDetails || hasProjects {
         sections.append(.projects)
     }
-    if hasChats {
+    if supportsCodexDetails || hasChats {
         sections.append(.chats)
     }
-    if hasSessions {
+    if supportsCodexDetails || hasSessions {
         sections.append(.sessions)
     }
     return sections
@@ -645,14 +653,10 @@ enum SpendDashboardTrendSection: Hashable, Identifiable {
 
     var pickerTitle: String {
         switch self {
-        case .daily: L("Day")
+        case .daily: L("Overview")
         case .hourly: L("Hour")
         }
     }
-}
-
-func spendDashboardAvailableTrendSections(hasHourlyData: Bool) -> [SpendDashboardTrendSection] {
-    hasHourlyData ? [.daily, .hourly] : [.daily]
 }
 
 func spendDashboardHasTokenMix(_ group: SpendDashboardModel.CurrencyGroup) -> Bool {
@@ -668,6 +672,9 @@ struct SpendDashboardCurrencySection: View {
     let requestedDays: Int
     let hidePersonalInfo: Bool
     let onClearSelectedDay: (() -> Void)?
+    let onSelectDay: ((Date) -> Void)?
+    let detailSelection: Binding<SpendDashboardDetailSection>?
+    let supportsCodexDetails: Bool
     @State private var selectedDetailSection: SpendDashboardDetailSection
     @State private var selectedTrendSection: SpendDashboardTrendSection
 
@@ -677,12 +684,18 @@ struct SpendDashboardCurrencySection: View {
         hidePersonalInfo: Bool = false,
         initialDetailSection: SpendDashboardDetailSection = .providers,
         initialTrendSection: SpendDashboardTrendSection? = nil,
+        detailSelection: Binding<SpendDashboardDetailSection>? = nil,
+        supportsCodexDetails: Bool = false,
+        onSelectDay: ((Date) -> Void)? = nil,
         onClearSelectedDay: (() -> Void)? = nil)
     {
         self.group = group
+        self.detailSelection = detailSelection
+        self.supportsCodexDetails = supportsCodexDetails
         self.requestedDays = requestedDays
         self.hidePersonalInfo = hidePersonalInfo
         self.onClearSelectedDay = onClearSelectedDay
+        self.onSelectDay = onSelectDay
         self._selectedDetailSection = State(initialValue: initialDetailSection)
         self._selectedTrendSection = State(
             initialValue: initialTrendSection
@@ -706,10 +719,13 @@ struct SpendDashboardCurrencySection: View {
             SpendDashboardDetailPanel(
                 group: self.group,
                 hidePersonalInfo: self.hidePersonalInfo,
-                selection: self.$selectedDetailSection)
+                supportsCodexDetails: self.supportsCodexDetails,
+                selection: self.detailSelection ?? self.$selectedDetailSection)
             SpendDashboardTrendPanel(
                 group: self.group,
-                selection: self.$selectedTrendSection)
+                selection: self.$selectedTrendSection,
+                onSelectDay: self.onSelectDay,
+                onClearSelectedDay: self.onClearSelectedDay)
             SpendDailyLedger(group: self.group)
         }
         .environment(\.timeZone, self.group.timeZone)
@@ -720,6 +736,7 @@ struct SpendDashboardCurrencySection: View {
 private struct SpendDashboardDetailPanel: View {
     let group: SpendDashboardModel.CurrencyGroup
     let hidePersonalInfo: Bool
+    var supportsCodexDetails = false
     @Binding var selection: SpendDashboardDetailSection
 
     var body: some View {
@@ -739,6 +756,22 @@ private struct SpendDashboardDetailPanel: View {
                 }
 
                 self.detailContent
+                if self.activeSection != .providers {
+                    if self.group.projects.isEmpty, self.group.sessions.isEmpty {
+                        Text(L("No usage breakdown data available."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if self.group.detailsExcludedFromTotals {
+                        Text(L("Local Codex details; excluded from combined totals."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let updatedAt = self.group.retainedDetailUpdatedAt {
+                        Text(L("Incomplete") + " · " + L(
+                            "Updated %@",
+                            spendDashboardLedgerDateText(updatedAt, timeZone: self.group.timeZone)))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }
@@ -747,7 +780,8 @@ private struct SpendDashboardDetailPanel: View {
         spendDashboardAvailableDetailSections(
             hasProjects: self.group.projects.contains { !$0.isProjectless },
             hasSessions: !self.group.sessions.isEmpty,
-            hasChats: self.group.projects.contains(where: \.isProjectless))
+            hasChats: self.group.projects.contains(where: \.isProjectless),
+            supportsCodexDetails: self.supportsCodexDetails)
     }
 
     private var activeSection: SpendDashboardDetailSection {
@@ -860,278 +894,6 @@ private struct SpendPanelExpandButton: View {
             .buttonStyle(.borderless)
             .padding(.top, 6)
         }
-    }
-}
-
-private struct SpendDashboardTrendPanel: View {
-    let group: SpendDashboardModel.CurrencyGroup
-    @Binding var selection: SpendDashboardTrendSection
-
-    var body: some View {
-        SpendDashboardPanel {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 12) {
-                    Text(self.activeSection.title)
-                        .font(.headline)
-                    Spacer()
-                    if self.availableSections.count > 1 {
-                        Picker(L("Usage & Spend"), selection: self.normalizedSelection) {
-                            ForEach(self.availableSections) { section in
-                                Text(section.pickerTitle).tag(section)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .controlSize(.small)
-                        .frame(width: 140)
-                        .accessibilityIdentifier("spend-dashboard-trend-picker")
-                    }
-                }
-
-                switch self.activeSection {
-                case .daily:
-                    SpendDailyChartContent(group: self.group)
-                case .hourly:
-                    SpendHourlyChartContent(group: self.group)
-                }
-            }
-        }
-        .onChange(of: self.group.selectedDay) { _, selectedDay in
-            self.selection = selectedDay != nil && !self.group.hourlyPoints.isEmpty ? .hourly : .daily
-        }
-    }
-
-    private var availableSections: [SpendDashboardTrendSection] {
-        spendDashboardAvailableTrendSections(hasHourlyData: !self.group.hourlyPoints.isEmpty)
-    }
-
-    private var activeSection: SpendDashboardTrendSection {
-        self.availableSections.contains(self.selection) ? self.selection : self.availableSections[0]
-    }
-
-    private var normalizedSelection: Binding<SpendDashboardTrendSection> {
-        Binding(
-            get: { self.activeSection },
-            set: { self.selection = $0 })
-    }
-}
-
-enum SpendChartContent: Equatable {
-    case chart
-    case unavailable
-}
-
-struct SpendChartSeries: Equatable {
-    let name: String
-    let provider: UsageProvider
-}
-
-private struct SpendChartStyle: ViewModifier {
-    let series: [SpendChartSeries]
-    let currencyCode: String
-
-    func body(content: Content) -> some View {
-        content
-            .chartForegroundStyleScale(
-                domain: self.series.map(\.name),
-                range: self.series.map {
-                    let color = ProviderAccentPalette.color(for: $0.provider)
-                    return Color(red: color.red, green: color.green, blue: color.blue)
-                })
-            .chartLegend(position: .bottom, alignment: .leading, spacing: 8)
-            .chartYAxis {
-                AxisMarks(position: .leading) { value in
-                    AxisGridLine()
-                    AxisValueLabel {
-                        if let amount = value.as(Double.self) {
-                            Text(UsageFormatter.compactCurrencyString(amount, currencyCode: self.currencyCode))
-                        }
-                    }
-                }
-            }
-    }
-}
-
-struct SpendDailyChartPresentation: Equatable {
-    let content: SpendChartContent
-    let series: [SpendChartSeries]
-    let dayCount: Int
-
-    init(dailyPoints: [SpendDashboardModel.DailyPoint], aggregateTotal: Double?) {
-        self.content = dailyPoints.isEmpty && aggregateTotal == nil ? .unavailable : .chart
-        self.dayCount = Set(dailyPoints.map(\.day)).count
-
-        var seenNames: Set<String> = []
-        self.series = dailyPoints.compactMap { point in
-            guard seenNames.insert(point.providerName).inserted else { return nil }
-            return SpendChartSeries(name: point.providerName, provider: point.provider)
-        }
-    }
-
-    var accessibilityValue: String {
-        L("%d days of usage data across %d services", self.dayCount, self.series.count)
-    }
-}
-
-private struct SpendDailyChartContent: View {
-    let group: SpendDashboardModel.CurrencyGroup
-
-    var body: some View {
-        let presentation = SpendDailyChartPresentation(
-            dailyPoints: self.group.dailyPoints,
-            aggregateTotal: self.group.totalCost)
-        if presentation.content == .unavailable {
-            ContentUnavailableView(L("Spend unavailable"), systemImage: "chart.bar.xaxis")
-                .frame(maxWidth: .infinity, minHeight: 170)
-        } else {
-            let topStackIDs = spendTopOfStackIDs(
-                for: self.group.dailyPoints,
-                key: \.day,
-                id: \.id,
-                stackEnd: \.stackEnd)
-            Chart(self.group.dailyPoints) { point in
-                BarMark(
-                    x: .value(L("Day"), point.day, unit: .day, calendar: self.group.calendar),
-                    yStart: .value(L("Estimated spend"), point.stackStart),
-                    yEnd: .value(L("Estimated spend"), point.stackEnd),
-                    width: .ratio(0.72))
-                    .foregroundStyle(by: .value(L("Provider"), point.providerName))
-                    // A clip cannot restore corners already removed by the native mark rounding.
-                    .cornerRadius(0)
-                    .clipShape(spendStackedBarSegmentShape(isTopOfStack: topStackIDs.contains(point.id)))
-                    .accessibilityLabel(Text(self.pointAccessibilityLabel(point)))
-                    .accessibilityValue(Text(UsageFormatter.currencyString(
-                        point.cost,
-                        currencyCode: self.group.currencyCode)))
-            }
-            .chartXScale(domain: self.group.chartDomain)
-            .chartXAxis { AxisMarks(format: self.dayFormat) }
-            .modifier(SpendChartStyle(series: presentation.series, currencyCode: self.group.currencyCode))
-            .frame(height: 170)
-            .accessibilityLabel(L("Daily estimated spend"))
-            .accessibilityValue(presentation.accessibilityValue)
-        }
-    }
-
-    private var dayFormat: Date.FormatStyle {
-        Date.FormatStyle(
-            locale: codexBarLocalizedLocale(),
-            calendar: self.group.calendar,
-            timeZone: self.group.timeZone)
-            .month(.abbreviated).day()
-    }
-
-    private func pointAccessibilityLabel(_ point: SpendDashboardModel.DailyPoint) -> String {
-        let day = point.day.formatted(self.dayFormat)
-        return "\(point.providerName), \(day)"
-    }
-}
-
-/// Finds the id of the highest-`stackEnd` point per grouping key (day/hour), regardless of how
-/// many providers are stacked in that group. Only that point's bar should render a rounded top.
-func spendTopOfStackIDs<Point, Key: Hashable>(
-    for points: [Point],
-    key: (Point) -> Key,
-    id: (Point) -> String,
-    stackEnd: (Point) -> Double) -> Set<String>
-{
-    var bestByKey: [Key: (id: String, stackEnd: Double)] = [:]
-    for point in points {
-        let pointKey = key(point)
-        let pointStackEnd = stackEnd(point)
-        if let existing = bestByKey[pointKey], existing.stackEnd >= pointStackEnd {
-            continue
-        }
-        bestByKey[pointKey] = (id(point), pointStackEnd)
-    }
-    return Set(bestByKey.values.map(\.id))
-}
-
-/// Only the outer top of a stacked bar should round; every seam and the baseline must stay flush.
-private func spendStackedBarSegmentShape(isTopOfStack: Bool) -> UnevenRoundedRectangle {
-    let topRadius: CGFloat = isTopOfStack ? 4 : 0
-    return UnevenRoundedRectangle(
-        topLeadingRadius: topRadius,
-        bottomLeadingRadius: 0,
-        bottomTrailingRadius: 0,
-        topTrailingRadius: topRadius,
-        style: .continuous)
-}
-
-struct SpendHourlyChartPresentation: Equatable {
-    let content: SpendChartContent
-    let series: [SpendChartSeries]
-    let hourCount: Int
-    let includeDateInPointLabels: Bool
-
-    init(hourlyPoints: [SpendDashboardModel.HourlyPoint], calendar: Calendar) {
-        self.content = hourlyPoints.isEmpty ? .unavailable : .chart
-        self.hourCount = Set(hourlyPoints.map(\.hour)).count
-        self.includeDateInPointLabels = Set(hourlyPoints.map { calendar.startOfDay(for: $0.hour) }).count > 1
-        var seenNames: Set<String> = []
-        self.series = hourlyPoints.compactMap { point in
-            guard seenNames.insert(point.providerName).inserted else { return nil }
-            return SpendChartSeries(name: point.providerName, provider: point.provider)
-        }
-    }
-
-    var accessibilityValue: String {
-        spendDashboardHourlyChartAccessibilityValue(
-            hourCount: self.hourCount,
-            serviceCount: self.series.count)
-    }
-}
-
-private struct SpendHourlyChartContent: View {
-    let group: SpendDashboardModel.CurrencyGroup
-
-    var body: some View {
-        let calendar = self.group.calendar
-        let presentation = SpendHourlyChartPresentation(
-            hourlyPoints: self.group.hourlyPoints,
-            calendar: calendar)
-        if presentation.content == .unavailable {
-            ContentUnavailableView(L("Spend unavailable"), systemImage: "chart.bar.xaxis")
-                .frame(maxWidth: .infinity, minHeight: 170)
-        } else {
-            let topStackIDs = spendTopOfStackIDs(
-                for: self.group.hourlyPoints,
-                key: \.hour,
-                id: \.id,
-                stackEnd: \.stackEnd)
-            Chart(self.group.hourlyPoints) { point in
-                BarMark(
-                    x: .value(L("Hour"), point.hour, unit: .hour, calendar: calendar),
-                    yStart: .value(L("Estimated spend"), point.stackStart),
-                    yEnd: .value(L("Estimated spend"), point.stackEnd),
-                    width: .ratio(0.72))
-                    .foregroundStyle(by: .value(L("Provider"), point.providerName))
-                    .cornerRadius(0)
-                    .clipShape(spendStackedBarSegmentShape(isTopOfStack: topStackIDs.contains(point.id)))
-                    .accessibilityLabel(Text(self.pointAccessibilityLabel(
-                        point,
-                        includeDate: presentation.includeDateInPointLabels)))
-                    .accessibilityValue(Text(UsageFormatter.currencyString(
-                        point.cost,
-                        currencyCode: self.group.currencyCode)))
-            }
-            .chartXScale(domain: self.group.hourlyChartDomain ?? self.group.chartDomain)
-            .modifier(SpendChartStyle(series: presentation.series, currencyCode: self.group.currencyCode))
-            .frame(height: 170)
-            .accessibilityLabel(L("Hourly estimated spend"))
-            .accessibilityValue(presentation.accessibilityValue)
-        }
-    }
-
-    private func pointAccessibilityLabel(
-        _ point: SpendDashboardModel.HourlyPoint,
-        includeDate: Bool) -> String
-    {
-        spendDashboardHourlyPointAccessibilityLabel(
-            providerName: point.providerName,
-            hour: point.hour,
-            timeZone: self.group.timeZone,
-            includeDate: includeDate)
     }
 }
 
@@ -1294,17 +1056,11 @@ private struct SpendDailyLedgerRow: View {
     }
 
     private var tokensText: String {
-        self.countText(self.summary.totalTokens, format: UsageFormatter.tokenCountString)
+        spendDashboardLedgerTokenText(self.summary)
     }
 
     private var requestsText: String {
-        self.countText(self.summary.requestCount, format: codexBarLocalizedInteger)
-    }
-
-    private func countText(_ count: Int?, format: (Int) -> String) -> String {
-        guard let count else { return "—" }
-        let text = format(count)
-        return self.summary.hasPartialCounts ? "≥\(text)" : text
+        spendDashboardLedgerRequestText(self.summary)
     }
 
     private var accessibilityLabel: String {
@@ -1318,7 +1074,7 @@ private struct SpendDailyLedgerRow: View {
     }
 }
 
-private struct SpendSessionRows: View {
+struct SpendSessionRows: View {
     let group: SpendDashboardModel.CurrencyGroup
     let hidePersonalInfo: Bool
     @State private var showsAllRows = false
@@ -1335,30 +1091,47 @@ private struct SpendSessionRows: View {
                 if row.rank > 1 {
                     Divider()
                 }
-                HStack(spacing: 10) {
-                    Text(spendDashboardRankText(row.rank))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 26, alignment: .leading)
-                    SpendProviderIcon(provider: row.provider, sourceKind: .native)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(identity.name)
-                            .lineLimit(1)
-                            .help(identity.name)
-                        Text(subtitle)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(spendDashboardRankText(row.rank))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 26, alignment: .leading)
+                        SpendProviderIcon(provider: row.provider, sourceKind: .native)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(identity.name)
+                                .fontWeight(.medium)
+                                .lineLimit(1)
+                                .help(identity.name)
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .help(subtitle)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(spendDashboardMetricText(
+                            cost: row.totalCost,
+                            tokens: row.totalTokens,
+                            currencyCode: self.group.currencyCode))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .help(subtitle)
+                            .monospacedDigit()
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Spacer()
-                    Text(spendDashboardMetricText(
-                        cost: row.totalCost,
-                        tokens: row.totalTokens,
-                        currencyCode: self.group.currencyCode))
-                        .monospacedDigit()
+                    if let performance = row.turnPerformance {
+                        SpendSessionPerformanceView(summary: performance)
+                    }
+                    if let source = row.toolActivitySource {
+                        SpendSessionToolActivityView(
+                            source: source,
+                            lastActivity: row.lastActivity,
+                            range: spendToolActivityRange(group: self.group),
+                            timeZone: self.group.timeZone,
+                            hidePersonalInfo: self.hidePersonalInfo)
+                    }
                 }
-                .padding(.vertical, 9)
+                .padding(.vertical, 12)
             }
             SpendPanelExpandButton(
                 rowCount: self.group.sessions.count,
@@ -1567,7 +1340,7 @@ enum SpendDashboardJSONExporter {
     }
 }
 
-private struct SpendDashboardPanel<Content: View>: View {
+struct SpendDashboardPanel<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -1595,6 +1368,31 @@ func spendDashboardLedgerCostText(_ summary: SpendDashboardModel.DailySummary, c
     return summary.hasPartialCost ? "~\(formatted)" : formatted
 }
 
+func spendDashboardLedgerTokenText(_ summary: SpendDashboardModel.DailySummary) -> String {
+    spendDashboardLedgerCountText(
+        summary.totalTokens,
+        isLowerBound: summary.hasPartialCounts,
+        format: UsageFormatter.tokenCountString)
+}
+
+func spendDashboardLedgerRequestText(_ summary: SpendDashboardModel.DailySummary) -> String {
+    // A missing source count makes only the request total a floor. Token totals keep their own flag.
+    spendDashboardLedgerCountText(
+        summary.requestCount,
+        isLowerBound: summary.hasPartialCounts || summary.requestsAreLowerBound,
+        format: codexBarLocalizedInteger)
+}
+
+func spendDashboardLedgerCountText(
+    _ count: Int?,
+    isLowerBound: Bool,
+    format: (Int) -> String) -> String
+{
+    guard let count else { return "—" }
+    let text = format(count)
+    return isLowerBound ? "≥\(text)" : text
+}
+
 func spendDashboardGroupTokenText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
     guard let tokens = group.totalTokens else { return "—" }
     let formatted = UsageFormatter.tokenCountString(tokens)
@@ -1607,10 +1405,6 @@ private func spendDashboardIncludesLocalHistory(_ group: SpendDashboardModel.Cur
 
 func spendDashboardProviderCountTitle(_ group: SpendDashboardModel.CurrencyGroup) -> String {
     spendDashboardIncludesLocalHistory(group) ? L("Sources") : L("Subscriptions")
-}
-
-func spendDashboardProviderPanelTitle(_ group: SpendDashboardModel.CurrencyGroup) -> String {
-    spendDashboardIncludesLocalHistory(group) ? L("By source") : L("By subscription")
 }
 
 func spendDashboardPartialSourceCoverageText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
