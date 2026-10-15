@@ -51,3 +51,9 @@
 - Keep provider data siloed: when rendering usage or account info for a provider (Claude vs Codex), never display identity/plan fields sourced from a different provider.
 - Claude CLI status line is custom + user-configurable; never rely on it for usage parsing by default. A user-enabled, opt-in statusLine JSON feed is permitted as an explicit data source (owner ruling, #2733): it must be off by default, clearly labeled as sourced from the user's own statusLine config, and fail soft when the format drifts.
 - Cookie imports: default Chrome-only when possible to avoid other browser prompts; override via browser list when needed.
+
+## Cursor Cloud specific instructions
+- Cloud agents are Linux. The macOS menu bar app, `./Scripts/compile_and_run.sh`, and AppKit tests do not run here. Swift 6.3.3 is on `PATH` (`swift`, `swiftc`).
+- CLI: `swift build --product CodexBarCLI --jobs 2`. Linux tests: `source Scripts/test_environment.sh && swift test --parallel --jobs 2`.
+- Desktop: `mkdir -p .local/linux-build && cd .local/linux-build && qmake6 ../../Integrations/Linux/codexbar-linux.pro && make -j2`. Offscreen checks: `python3 Integrations/Linux/tests/test_desktop.py`, and `qmake6 ../../Integrations/Linux/tests/accounts.pro && make -j2` for the account test.
+- Do not run live provider probes, browser-cookie imports, or `codexbar usage` against real accounts. Launch the desktop with an isolated `HOME` and a fixture CLI. If `HOME` is overridden on this display, keep `XAUTHORITY` pointed at the host cookie or Qt cannot open X11.
