@@ -81,8 +81,7 @@ public enum KimiProviderDescriptor {
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
                 debugLogUnavailableMessage: "Kimi debug log not yet implemented",
-                browserCookieOrder: BrowserCookieImportSupport.chromeOnly(
-                    reason: "Kimi imports only Chrome to avoid unrelated browser prompts."),
+                browserCookieOrder: nil,
                 dashboardURL: KimiRegion.china.consoleURL.absoluteString,
                 statusPageURL: nil),
             branding: ProviderBranding(
@@ -106,9 +105,9 @@ public enum KimiProviderDescriptor {
             presentation: ProviderUsagePresentation(
                 extraRateWindowSelector: { $0.extraRateWindows ?? [] },
                 semanticWindowResolver: { snapshot in
-                    let candidates = [snapshot.primary, snapshot.secondary, snapshot.tertiary]
+                    let candidates = [snapshot.primary, snapshot.secondary, snapshot.tertiary].compactMap(\.self)
                         + (snapshot.extraRateWindows ?? []).map(\.window)
-                    let usable = candidates.compactMap(\.self).filter { !$0.isSyntheticPlaceholder }
+                    let usable = candidates.filter { !$0.isSyntheticPlaceholder }
                     let session = usable.first { (60...(12 * 60)).contains($0.windowMinutes ?? 0) }
                     let cadenceWeekly = usable.first { $0.windowMinutes == 7 * 24 * 60 }
                     let primary = snapshot.primary.flatMap { $0.isSyntheticPlaceholder ? nil : $0 }
