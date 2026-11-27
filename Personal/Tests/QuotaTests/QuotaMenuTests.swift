@@ -93,3 +93,22 @@ extension QuotaMenuTests {
         #expect(QuotaMenuRow(row, showUsed: false).label == ">99.99% 剩余")
     }
 }
+
+extension QuotaMenuTests {
+    @Test
+    func `Codex shows one additional row per feature and period when product labels vary`() throws {
+        let data = Data("""
+        {"additional_rate_limits":[
+          {"limit_name":"Example","metered_feature":"one","rate_limit":{"primary_window":
+            {"used_percent":12,"limit_window_seconds":18000,"reset_at":0}}},
+          {"limit_name":"Example duplicate","metered_feature":"one","rate_limit":{"primary_window":
+            {"used_percent":99,"limit_window_seconds":18000,"reset_at":0}}},
+          {"limit_name":"Example weekly","metered_feature":"one","rate_limit":{"primary_window":
+            {"used_percent":45,"limit_window_seconds":604800,"reset_at":1795737600}}}]}
+        """.utf8)
+        let windows = try CodexQuota.windows(data)
+        #expect(windows.map(\.usedPercent) == [12, 45])
+        #expect(windows.first?.resetsAt == nil)
+        #expect(windows.last?.resetsAt == ISO8601DateParser.parse(self.reset))
+    }
+}

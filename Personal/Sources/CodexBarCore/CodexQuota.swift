@@ -32,7 +32,7 @@ enum CodexQuota {
             return QuotaWindow(
                 title: "\(product) · \(period)",
                 usedPercent: self.used_percent,
-                resetsAt: self.reset_at.map(Date.init(timeIntervalSince1970:)))
+                resetsAt: self.reset_at.flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0) : nil })
         }
     }
 
@@ -47,11 +47,10 @@ enum CodexQuota {
             self.secondary = try? keys.decode(Window.self, forKey: .secondary_window)
         }
 
-        func rows(product: String) -> [QuotaWindow] {
-            [
-                self.primary?.row(product: product, fallback: "主额度"),
-                self.secondary?.row(product: product, fallback: "次额度"),
-            ].compactMap(\.self)
+        var lanes: [(window: Window, slot: String)] {
+            [(self.primary, "主额度"), (self.secondary, "次额度")].compactMap { window, slot in
+                window.map { ($0, slot) }
+            }
         }
     }
 
@@ -61,6 +60,12 @@ enum CodexQuota {
         let rate_limit: Limits?
     }
 
+    private struct WindowID: Hashable {
+        let feature: String
+        let duration: Int?
+        let unspecifiedSlot: String?
+    }
+
     private struct Response: Decodable {
         var windows: [QuotaWindow]
         enum Keys: String, CodingKey { case rate_limit, additional_rate_limits }
@@ -68,14 +73,25 @@ enum CodexQuota {
         init(from decoder: Decoder) throws {
             let root = try decoder.container(keyedBy: Keys.self)
             let limits = try? root.decode(Limits.self, forKey: .rate_limit)
-            self.windows = limits?.rows(product: "Codex") ?? []
+            self.windows = (limits?.lanes ?? []).compactMap { $0.window.row(product: "Codex", fallback: $0.slot) }
+            var seen = Set<WindowID>()
             if var extra = try? root.nestedUnkeyedContainer(forKey: .additional_rate_limits) {
                 while !extra.isAtEnd {
                     let element = try extra.superDecoder()
                     guard let limit = try? Additional(from: element),
                           let name = limit.limit_name?.trimmedNonEmpty ?? limit.metered_feature?.trimmedNonEmpty
                     else { continue }
-                    self.windows += limit.rate_limit?.rows(product: name) ?? []
+                    let feature = (limit.metered_feature?.trimmedNonEmpty ?? name).lowercased()
+                    for (window, slot) in limit.rate_limit?.lanes ?? [] {
+                        let duration = window.limit_window_seconds.flatMap { $0 > 0 ? $0 : nil }
+                        let id = WindowID(
+                            feature: feature,
+                            duration: duration,
+                            unspecifiedSlot: duration == nil ? slot : nil)
+                        if let row = window.row(product: name, fallback: slot), seen.insert(id).inserted {
+                            self.windows.append(row)
+                        }
+                    }
                 }
             }
         }

@@ -1,6 +1,9 @@
 import Foundation
 
 enum AntigravityRemoteClient {
+    /// The model availability listing can return placeholder readings near 100% remaining.
+    static let availabilityFractionThreshold: Decimal = 0.999
+
     static let clientMetadata = [
         "ideType": "ANTIGRAVITY",
         "platform": "PLATFORM_UNSPECIFIED",

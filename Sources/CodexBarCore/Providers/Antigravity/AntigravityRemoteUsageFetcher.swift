@@ -274,7 +274,8 @@ public struct AntigravityRemoteUsageFetcher: Sendable {
         guard !quotas.isEmpty else { return false }
         return quotas.allSatisfy { quota in
             guard let remaining = quota.remainingFraction else { return false }
-            return remaining >= 0.999
+            return remaining >= NSDecimalNumber(decimal: AntigravityRemoteClient.availabilityFractionThreshold)
+                .doubleValue
         }
     }
 

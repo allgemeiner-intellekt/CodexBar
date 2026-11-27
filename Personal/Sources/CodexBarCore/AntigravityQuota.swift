@@ -43,7 +43,8 @@ enum AntigravityQuota {
             }, reload: loadProject)
         if let project, project != stored {
             credentials.projectID = project
-            try save(credentials)
+            // A discovered project is already usable in this request even when the cache is read-only.
+            try? save(credentials)
         }
         let body = project.map { ["project": $0] } ?? [:]
         do {
@@ -77,7 +78,8 @@ enum AntigravityQuota {
                     reset: model.quotaInfo?.resetTime)
             }
             // Some clients receive a full availability list for every model. Require measured buckets for that shape.
-            if rows.contains(where: { $0.usedPercent > 0 }) { return rows }
+            let threshold = 100 * (1 - AntigravityRemoteClient.availabilityFractionThreshold)
+            if rows.contains(where: { $0.usedPercent > threshold }) { return rows }
         } catch is DecodingError {
             // The independent bucket endpoint may still have a usable response.
         } catch let QuotaError.http(status) where [403, 404, 501].contains(status) {
@@ -85,10 +87,21 @@ enum AntigravityQuota {
         }
         let data = try await self.request("retrieveUserQuota", body: project, token: token, http: http)
         let response = try JSONDecoder().decode(AntigravityRemoteClient.RetrieveUserQuotaResponse.self, from: data)
-        return (response.buckets ?? []).compactMap { bucket in
+        let windows = (response.buckets ?? []).compactMap { bucket -> QuotaWindow? in
             guard let model = bucket.modelId?.trimmedNonEmpty else { return nil }
             return self.window(title: model, remaining: bucket.remainingFraction, reset: bucket.resetTime)
         }
+        // The legacy endpoint can repeat a model at the same reset with different available balances.
+        let periods = Dictionary(grouping: windows) { BucketID(model: $0.title, resetsAt: $0.resetsAt) }
+        return periods.values.compactMap { $0.max { $0.usedPercent < $1.usedPercent } }.sorted {
+            if $0.title != $1.title { return $0.title < $1.title }
+            return ($0.resetsAt ?? .distantFuture) < ($1.resetsAt ?? .distantFuture)
+        }
+    }
+
+    private struct BucketID: Hashable {
+        let model: String
+        let resetsAt: Date?
     }
 
     private struct Summary: Decodable {

@@ -14,7 +14,7 @@ private final class AccessLog: @unchecked Sendable {
         self.lock.withLock { self.events }
     }
 
-    func credentials() -> QuotaCredentials {
+    func credentials(projectCacheWritable: Bool = true) -> QuotaCredentials {
         QuotaCredentials(
             codex: {
                 self.add("read CodexBar Codex grant")
@@ -29,7 +29,10 @@ private final class AccessLog: @unchecked Sendable {
                 self.add("read CodexBar Google grant")
                 return AntigravityOAuthCredentials(accessToken: "test-g", refreshToken: nil, expiryDate: nil)
             },
-            saveGoogle: { _ in self.add("save CodexBar Google grant") })
+            saveGoogle: { _ in
+                self.add("save CodexBar Google grant")
+                if !projectCacheWritable { throw CocoaError(.fileWriteNoPermission) }
+            })
     }
 
     func http(_ reply: @escaping @Sendable (URLRequest) throws -> (Int, String)) -> ProviderHTTPTransportHandler {
@@ -123,24 +126,26 @@ extension QuotaServiceTests {
     @Test
     func `new Google grant obtains a project then reads measured legacy model quotas`() async throws {
         let log = AccessLog()
-        let service = QuotaService(credentials: log.credentials(), transport: log.http { request in
-            let path = request.url?.lastPathComponent
-            if path == "v1internal:loadCodeAssist" {
-                return (200, #"{"allowedTiers":[{"id":"starter","isDefault":true}]}"#)
-            }
-            let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any]
-            if path == "v1internal:onboardUser" {
-                #expect(body?["tierId"] as? String == "starter")
-                return (200, #"{"response":{"cloudaicompanionProject":{"id":"personal"}}}"#)
-            }
-            #expect(body?["project"] as? String == "personal")
-            if path == "v1internal:fetchAvailableModels" {
-                return (
-                    200,
-                    #"{"models":{"example":{"displayName":"Example","quotaInfo":{"remainingFraction":0.42}}}}"#)
-            }
-            return (404, "{}")
-        })
+        let service = QuotaService(
+            credentials: log.credentials(projectCacheWritable: false),
+            transport: log.http { request in
+                let path = request.url?.lastPathComponent
+                if path == "v1internal:loadCodeAssist" {
+                    return (200, #"{"allowedTiers":[{"id":"starter","isDefault":true}]}"#)
+                }
+                let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any]
+                if path == "v1internal:onboardUser" {
+                    #expect(body?["tierId"] as? String == "starter")
+                    return (200, #"{"response":{"cloudaicompanionProject":{"id":"personal"}}}"#)
+                }
+                #expect(body?["project"] as? String == "personal")
+                if path == "v1internal:fetchAvailableModels" {
+                    return (
+                        200,
+                        #"{"models":{"example":{"displayName":"Example","quotaInfo":{"remainingFraction":0.42}}}}"#)
+                }
+                return (404, "{}")
+            })
         let windows = try await service.fetch(.antigravity)
         #expect(windows.map(\.usedPercent) == [58])
         #expect(windows.map(\.title) == ["Example"])
@@ -170,11 +175,17 @@ extension QuotaServiceTests {
             case "v1internal:retrieveUserQuotaSummary":
                 return (404, "{}")
             case "v1internal:fetchAvailableModels":
-                return (200, #"{"models":{"example":{"quotaInfo":{"remainingFraction":1}}}}"#)
+                return (200, """
+                {"models":{"example":{"quotaInfo":{"remainingFraction":0.9995}},
+                           "other":{"quotaInfo":{"remainingFraction":1}}}}
+                """)
             case "v1internal:retrieveUserQuota":
                 let project = try JSONDecoder().decode([String: String].self, from: #require(request.httpBody))
                 #expect(project["project"] == "saved")
-                return (200, #"{"buckets":[{"modelId":"example","remainingFraction":0.75}]}"#)
+                return (200, """
+                {"buckets":[{"modelId":"example","remainingFraction":0.9},
+                            {"modelId":"example","remainingFraction":0.75}]}
+                """)
             default: throw URLError(.unsupportedURL)
             }
         })
