@@ -68,7 +68,7 @@ def main():
         raise SystemExit(f'Expected arm64, found {arches}')
     metadata = bundle_metadata(app, commit)
     products = subprocess.check_output(
-        ['swift', 'build', '--package-path', 'Personal', '-c', 'release', '--show-bin-path'], text=True).strip()
+        ['swift', 'build', '--build-system', 'native', '--package-path', 'Personal', '-c', 'release', '--show-bin-path'], text=True).strip()
     metadata['compiled_sources'] = compiler_inventory(root, Path(products))
     metadata['run_url'] = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
     metadata['run_attempt'] = os.environ['GITHUB_RUN_ATTEMPT']

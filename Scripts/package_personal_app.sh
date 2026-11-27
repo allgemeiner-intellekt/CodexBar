@@ -2,8 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source version.env
-swift build --package-path Personal -c release --product CodexBar
-products=$(swift build --package-path Personal -c release --show-bin-path)
+# The archive records the native SwiftPM link and source lists from this build.
+swift build --build-system native --package-path Personal -c release --product CodexBar
+products=$(swift build --build-system native --package-path Personal -c release --show-bin-path)
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 app="$stage/CodexBar.app"
