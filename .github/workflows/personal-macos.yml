@@ -130,10 +130,6 @@ jobs:
            (!inputs.run_validation && needs.check.result == 'skipped' && needs.test.result == 'skipped')) }}
     runs-on: xcode-27
     timeout-minutes: 60
-    env:
-      CODEXBAR_SIGNING: adhoc
-      CODEXBAR_SKIP_LAUNCH_SMOKE: '1'
-      ARCHES: arm64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -155,14 +151,6 @@ jobs:
           swift --version
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "build=$(xcodebuild -version | tail -1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: |
-            .build
-            ~/Library/Caches/org.swift.swiftpm
-          key: personal-package-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-${{ steps.toolchain.outputs.source_sha }}
-          restore-keys: |
-            personal-package-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-
       - name: Build and verify personal app
         run: |
           mkdir -p logs
@@ -180,7 +168,5 @@ jobs:
         if: always()
         with:
           name: personal-package-logs
-          path: |
-            logs/
-            .build/xcode-widget-extension-release/xcodebuild.log
+          path: logs/
           retention-days: 7

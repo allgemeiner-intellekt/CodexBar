@@ -39,9 +39,12 @@ enum CodexDeviceLogin {
             try Task.checkCancellation()
             let data: Data
             do {
-                data = try await self.post("api/accounts/deviceauth/token", [
-                    "device_auth_id": challenge.device_auth_id, "user_code": code,
-                ], http)
+                data = try await self.post(
+                    "api/accounts/deviceauth/token",
+                    [
+                        "device_auth_id": challenge.device_auth_id, "user_code": code,
+                    ],
+                    http)
             } catch let QuotaError.http(status) where status == 403 || status == 404 {
                 try await clock.sleep(until: min(deadline, clock.now.advanced(by: .seconds(min(900, delay)))))
                 continue
@@ -62,9 +65,13 @@ enum CodexDeviceLogin {
 
     static func refresh(_ grant: CodexGrant, http: QuotaHTTP) async throws -> CodexGrant {
         do {
-            let data = try await self.post("oauth/token", [
-                "client_id": self.clientID, "grant_type": "refresh_token", "refresh_token": grant.refreshToken,
-            ], http)
+            let data = try await self.post(
+                "oauth/token",
+                [
+                    "client_id": self.clientID, "grant_type": "refresh_token",
+                    "refresh_token": grant.refreshToken,
+                ],
+                http)
             return try self.grant(data, previous: grant)
         } catch QuotaError.http(400) {
             throw QuotaError.unauthorized
@@ -82,7 +89,7 @@ enum CodexDeviceLogin {
               let refresh = response.refresh_token?.trimmedNonEmpty ?? previous?.refreshToken
         else { throw QuotaError.unauthorized }
         let account = [response.id_token, access].compactMap { token -> String? in
-            let payload = AntigravityOAuthCredentials.claims(fromIDToken: token)
+            let payload = JWTClaims.decode(token)
             let auth = payload?["https://api.openai.com/auth"] as? [String: Any]
             return (auth?["chatgpt_account_id"] ?? payload?["chatgpt_account_id"]) as? String
         }.first

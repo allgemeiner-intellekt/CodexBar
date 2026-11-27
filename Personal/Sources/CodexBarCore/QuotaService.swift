@@ -64,7 +64,7 @@ package struct QuotaCredentialFiles: Sendable {
             saveGoogle: { try self.googleStore.save($0) })
     }
 
-    private func read<T: Decodable>(_ type: T.Type, provider: Subscription) throws -> T? {
+    private func read<T: Decodable>(_ type: T.Type, provider: QuotaSubscription) throws -> T? {
         do {
             let data = try Data(contentsOf: self.directory.appendingPathComponent(provider.rawValue))
             return try JSONDecoder().decode(type, from: data)
@@ -73,7 +73,7 @@ package struct QuotaCredentialFiles: Sendable {
         }
     }
 
-    private func save(_ value: some Encodable, provider: Subscription) throws {
+    private func save(_ value: some Encodable, provider: QuotaSubscription) throws {
         try CredentialFileWriter.writePrivate(
             JSONEncoder().encode(value), to: self.directory.appendingPathComponent(provider.rawValue))
     }
@@ -82,7 +82,7 @@ package struct QuotaCredentialFiles: Sendable {
         try self.save(grant, provider: .kimi)
     }
 
-    package func disconnect(_ provider: Subscription) throws {
+    package func disconnect(_ provider: QuotaSubscription) throws {
         if provider == .antigravity {
             try self.googleStore.deleteIfPresent()
             return
@@ -109,7 +109,7 @@ package struct QuotaService: Sendable {
             session: ProviderHTTPClient.redirectGuardedSession(configuration: config)))
     }
 
-    package func fetch(_ provider: Subscription) async throws -> [QuotaWindow] {
+    package func fetch(_ provider: QuotaSubscription) async throws -> [QuotaWindow] {
         let windows: [QuotaWindow]
         switch provider {
         case .antigravity:

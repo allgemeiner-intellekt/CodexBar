@@ -30,6 +30,28 @@ def bundle_metadata(app, commit):
     }
 
 
+def compiler_inventory(root, products):
+    """Read the SwiftPM linker's object list and the source lists that produced those objects."""
+    link_list = products / 'CodexBar.product/Objects.LinkFileList'
+    targets = {Path(line).parent.name for line in link_list.read_text().splitlines()}
+    if targets != {'CodexBar.build', 'CodexBarCore.build'}:
+        raise ValueError(f'Unexpected linked targets: {sorted(targets)}')
+    sources = []
+    providers = set()
+    for target in sorted(targets):
+        for line in (products / target / 'sources').read_text().splitlines():
+            path = Path(line).resolve(strict=True).relative_to(root)
+            if 'Providers' in path.parts:
+                provider = path.parts[path.parts.index('Providers') + 1]
+                providers.add(provider)
+            elif path.parts[:2] != ('Personal', 'Sources') and path.parent != Path('Sources/CodexBarCore'):
+                raise ValueError(f'Unexpected personal source: {path}')
+            sources.append(str(path))
+    if providers != {'Codex', 'Kimi', 'Antigravity'}:
+        raise ValueError(f'Unexpected compiled providers: {sorted(providers)}')
+    return sorted(sources)
+
+
 def main():
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
@@ -45,6 +67,9 @@ def main():
     if arches != 'arm64':
         raise SystemExit(f'Expected arm64, found {arches}')
     metadata = bundle_metadata(app, commit)
+    products = subprocess.check_output(
+        ['swift', 'build', '--package-path', 'Personal', '-c', 'release', '--show-bin-path'], text=True).strip()
+    metadata['compiled_sources'] = compiler_inventory(root, Path(products))
     metadata['run_url'] = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
     metadata['run_attempt'] = os.environ['GITHUB_RUN_ATTEMPT']
     output = root / 'personal-artifact'

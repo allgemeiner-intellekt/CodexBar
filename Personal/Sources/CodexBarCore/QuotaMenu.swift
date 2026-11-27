@@ -1,6 +1,6 @@
 import Foundation
 
-package enum Subscription: String, CaseIterable, Identifiable, Sendable {
+package enum QuotaSubscription: String, CaseIterable, Identifiable, Sendable {
     case codex
     case kimi
     case antigravity
@@ -73,6 +73,26 @@ package enum QuotaError: LocalizedError, Equatable {
         case .unauthorized: "授权已失效或无权读取额度。请在设置中重新连接。"
         case .unavailable: "服务商未返回可用的额度数据。"
         case let .http(status): "额度查询失败（HTTP \(status)）。"
+        }
+    }
+}
+
+package struct QuotaMenuDescriptor {
+    package struct Card: Identifiable {
+        package let provider: QuotaSubscription
+        package let rows: [QuotaMenuRow]
+        package let message: String?
+        package var id: QuotaSubscription {
+            self.provider
+        }
+    }
+
+    package let cards: [Card]
+
+    package init(windows: [QuotaSubscription: [QuotaWindow]], errors: [QuotaSubscription: String], showUsed: Bool) {
+        self.cards = QuotaSubscription.allCases.map { provider in
+            let rows = (windows[provider] ?? []).map { QuotaMenuRow($0, showUsed: showUsed) }
+            return Card(provider: provider, rows: rows, message: rows.isEmpty ? errors[provider] ?? "正在查询…" : nil)
         }
     }
 }

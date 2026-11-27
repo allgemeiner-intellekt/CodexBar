@@ -30,7 +30,8 @@ enum CodexQuota {
             default: fallback
             }
             return QuotaWindow(
-                title: "\(product) · \(period)", usedPercent: self.used_percent,
+                title: "\(product) · \(period)",
+                usedPercent: self.used_percent,
                 resetsAt: self.reset_at.map(Date.init(timeIntervalSince1970:)))
         }
     }

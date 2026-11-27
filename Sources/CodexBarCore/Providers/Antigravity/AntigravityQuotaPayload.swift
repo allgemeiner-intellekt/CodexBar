@@ -19,14 +19,14 @@ struct QuotaSummaryBucketPayload: Decodable {
     let name: String?
     let description: String?
     let disabled: Bool?
-    let remainingFraction: Double?
+    let remainingFraction: Decimal?
     let remaining: QuotaSummaryRemainingPayload?
     let resetTime: String?
     let window: String?
 }
 
 struct QuotaSummaryRemainingPayload: Decodable {
-    let remainingFraction: Double?
+    let remainingFraction: Decimal?
 
     private enum CodingKeys: String, CodingKey {
         case remainingFraction
@@ -36,12 +36,12 @@ struct QuotaSummaryRemainingPayload: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let remainingFraction = try container.decodeIfPresent(Double.self, forKey: .remainingFraction) {
+        if let remainingFraction = try container.decodeIfPresent(Decimal.self, forKey: .remainingFraction) {
             self.remainingFraction = remainingFraction
             return
         }
         let oneofCase = try container.decodeIfPresent(String.self, forKey: .oneofCase)
         self.remainingFraction = oneofCase == "remainingFraction"
-            ? try container.decodeIfPresent(Double.self, forKey: .value) : nil
+            ? try container.decodeIfPresent(Decimal.self, forKey: .value) : nil
     }
 }

@@ -78,7 +78,8 @@ extension AntigravityStatusProbe {
         return AntigravityQuotaSummaryBucket(
             bucketId: resolvedBucketId,
             displayName: self.nonEmpty(displayName) ?? resolvedBucketId,
-            remainingFraction: payload.remainingFraction ?? payload.remaining?.remainingFraction,
+            remainingFraction: (payload.remainingFraction ?? payload.remaining?.remainingFraction)
+                .map { NSDecimalNumber(decimal: $0).doubleValue },
             resetTime: resetTime,
             resetDescription: payload.description,
             disabled: payload.disabled ?? false,

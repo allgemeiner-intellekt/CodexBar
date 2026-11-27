@@ -1,12 +1,12 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-/// The personal artifact has no dependency on the upstream all-provider targets or their helpers.
-let package = Package(
-    name: "PersonalCodexBar",
-    platforms: [.macOS(.v14)],
-    targets: [
-        .target(name: "CodexBarCore"),
-        .executableTarget(name: "CodexBar", dependencies: ["CodexBarCore"]),
-        .testTarget(name: "QuotaTests", dependencies: ["CodexBarCore"]),
-    ])
+var targets: [Target] = [
+    .target(name: "CodexBarCore"),
+    .testTarget(name: "QuotaTests", dependencies: ["CodexBarCore"]),
+]
+#if os(macOS)
+targets.append(.executableTarget(name: "CodexBar", dependencies: ["CodexBarCore"]))
+#endif
+
+let package = Package(name: "PersonalCodexBar", platforms: [.macOS(.v14)], targets: targets)

@@ -4,22 +4,22 @@ import SwiftUI
 
 struct QuotaMenu: View {
     let store: QuotaStore
-    @AppStorage(QuotaDisplayPreference.key) private var showUsed = true
+    @AppStorage(QuotaDisplayPreference.key) private var showUsed = QuotaDisplayPreference.personalDefault
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(Subscription.allCases) { provider in
+                    ForEach(QuotaMenuDescriptor(
+                        windows: self.store.windows, errors: self.store.errors, showUsed: self.showUsed).cards)
+                    { card in
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(provider.title).font(.headline)
-                            if let windows = self.store.windows[provider] {
-                                ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
-                                    self.row(QuotaMenuRow(window, showUsed: self.showUsed))
-                                }
-                            } else {
-                                Text(self.store.errors[provider] ?? "正在查询…")
-                                    .foregroundStyle(.secondary).font(.callout)
+                            Text(card.provider.title).font(.headline)
+                            ForEach(Array(card.rows.enumerated()), id: \.offset) { _, row in
+                                self.row(row)
+                            }
+                            if let message = card.message {
+                                Text(message).foregroundStyle(.secondary).font(.callout)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -66,7 +66,7 @@ struct QuotaSettings: View {
 
     var body: some View {
         Form {
-            ForEach(Subscription.allCases) { provider in
+            ForEach(QuotaSubscription.allCases) { provider in
                 Section(provider.title) {
                     switch provider {
                     case .codex:

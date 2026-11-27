@@ -4,6 +4,8 @@
 included:
   - Sources
   - Tests
+  - Personal/Sources
+  - Personal/Tests
 
 # Paths to exclude
 excluded:

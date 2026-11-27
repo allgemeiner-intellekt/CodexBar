@@ -199,9 +199,9 @@ extension KimiUsageSnapshot {
 
 extension KimiRatioPool {
     func window(minutes: Int) -> RateWindow? {
-        guard let usedRatio, usedRatio.isFinite, usedRatio >= 0 else { return nil }
+        guard let usedRatio, !usedRatio.isNaN, usedRatio >= 0 else { return nil }
         return RateWindow(
-            usedPercent: min(1, usedRatio) * 100,
+            usedPercent: NSDecimalNumber(decimal: min(1, usedRatio) * 100).doubleValue,
             windowMinutes: minutes,
             resetsAt: ISO8601DateParser.parse(self.resetTime),
             resetDescription: nil)

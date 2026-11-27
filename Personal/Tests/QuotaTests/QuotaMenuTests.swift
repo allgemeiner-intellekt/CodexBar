@@ -21,31 +21,32 @@ struct QuotaMenuTests {
         {"response":{"groups":[{"name":"Gemini","buckets":[{"id":"weekly","remaining":{"case":"remainingFraction",
          "value":0.75},"resetTime":"\(self.reset)"}]}]}}
         """.utf8))
-        #expect(Subscription.allCases.map(\.rawValue) == ["codex", "kimi", "antigravity"])
+        #expect(QuotaSubscription.allCases.map(\.rawValue) == ["codex", "kimi", "antigravity"])
         #expect(kimi.map(\.title) == ["5 小时", "每周"])
         #expect(google.map(\.title) == ["Gemini · weekly"])
         #expect(codex.map(\.title) == ["Codex · 5 小时"])
-        for window in codex + kimi + google {
-            let used = QuotaMenuRow(window, showUsed: true)
-            let left = QuotaMenuRow(window, showUsed: false)
-            #expect(used.label == "25% 已用")
-            #expect(used.fill == 25)
-            #expect(left.label == "75% 剩余")
-            #expect(left.fill == 75)
-            #expect(used.resetsAt == ISO8601DateParser.parse(self.reset))
-            #expect(left.resetsAt == used.resetsAt)
+        let snapshots: [QuotaSubscription: [QuotaWindow]] = [.codex: codex, .kimi: kimi, .antigravity: google]
+        for showUsed in [true, false] {
+            let menu = QuotaMenuDescriptor(windows: snapshots, errors: [:], showUsed: showUsed)
+            #expect(menu.cards.map(\.provider) == [.codex, .kimi, .antigravity])
+            #expect(menu.cards.map(\.rows.count) == [1, 2, 1])
+            for row in menu.cards.flatMap(\.rows) {
+                #expect(row.label == (showUsed ? "25% 已用" : "75% 剩余"))
+                #expect(row.fill == (showUsed ? 25 : 75))
+                #expect(row.resetsAt == ISO8601DateParser.parse(self.reset))
+            }
         }
     }
 
     @Test
     func `fresh display defaults to used and upgrades honor an explicit false`() {
         let defaults = MemoryDefaults()
-        #expect(QuotaDisplayPreference.showUsed(in: defaults, defaultValue: true))
+        #expect(QuotaDisplayPreference.showUsed(in: defaults))
         defaults.values["usageBarsShowUsed"] = false
         defaults.values["providerOrder"] = ["claude", "kimi"]
-        #expect(!QuotaDisplayPreference.showUsed(in: defaults, defaultValue: true))
-        #expect(Subscription.allCases.count == 3)
-        #expect(Subscription(rawValue: "claude") == nil)
+        #expect(!QuotaDisplayPreference.showUsed(in: defaults))
+        #expect(QuotaSubscription.allCases.count == 3)
+        #expect(QuotaSubscription(rawValue: "claude") == nil)
     }
 
     @Test
@@ -77,7 +78,18 @@ struct QuotaMenuTests {
     }
 }
 
-private final class MemoryDefaults: UserDefaults, @unchecked Sendable {
+private final class MemoryDefaults: UserDefaults {
     var values: [String: Any] = [:]
     override func object(forKey key: String) -> Any? { self.values[key] }
+}
+
+extension QuotaMenuTests {
+    @Test
+    func `decimal conversion keeps nearly full and nearly empty distinct from their endpoints`() throws {
+        let google = Data(#"{"groups":[{"buckets":[{"id":"weekly","remainingFraction":0.99999999999999999}]}]}"#.utf8)
+        let row = try #require(AntigravityQuota.summary(google).first)
+        #expect(row.usedPercent == Decimal(string: "0.000000000000001"))
+        #expect(QuotaMenuRow(row, showUsed: true).label == "<0.01% 已用")
+        #expect(QuotaMenuRow(row, showUsed: false).label == ">99.99% 剩余")
+    }
 }

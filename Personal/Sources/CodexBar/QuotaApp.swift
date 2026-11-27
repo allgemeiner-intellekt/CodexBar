@@ -8,9 +8,9 @@ import SwiftUI
 final class QuotaStore {
     let files: QuotaCredentialFiles
     let service: QuotaService
-    var windows: [Subscription: [QuotaWindow]] = [:]
-    var errors: [Subscription: String] = [:]
-    var busy: Set<Subscription> = []
+    var windows: [QuotaSubscription: [QuotaWindow]] = [:]
+    var errors: [QuotaSubscription: String] = [:]
+    var busy: Set<QuotaSubscription> = []
     var deviceCode: String?
     var codexLogin: Task<Void, Never>?
 
@@ -22,7 +22,7 @@ final class QuotaStore {
         self.service = QuotaService(credentials: files.credentials)
     }
 
-    func refresh(_ provider: Subscription) async {
+    func refresh(_ provider: QuotaSubscription) async {
         guard self.busy.insert(provider).inserted else { return }
         defer { self.busy.remove(provider) }
         do {
@@ -36,7 +36,7 @@ final class QuotaStore {
 
     func refreshAll() async {
         await withTaskGroup(of: Void.self) { group in
-            for provider in Subscription.allCases {
+            for provider in QuotaSubscription.allCases {
                 group.addTask { await self.refresh(provider) }
             }
         }
@@ -79,7 +79,7 @@ final class QuotaStore {
         }
     }
 
-    func disconnect(_ provider: Subscription) {
+    func disconnect(_ provider: QuotaSubscription) {
         guard !self.busy.contains(provider) else { return }
         do {
             try self.files.disconnect(provider)
@@ -114,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum PersonalQuotaMain {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--list-subscriptions") {
-            for provider in Subscription.allCases {
+            for provider in QuotaSubscription.allCases {
                 print(provider.rawValue)
             }
             return

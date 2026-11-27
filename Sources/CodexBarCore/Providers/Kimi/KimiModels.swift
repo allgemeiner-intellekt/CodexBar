@@ -68,7 +68,7 @@ struct KimiCodeUsagePools: Codable, Sendable {
 }
 
 struct KimiRatioPool: Codable, Sendable {
-    let usedRatio: Double?
+    let usedRatio: Decimal?
     let resetTime: String?
 
     private enum CodingKeys: String, CodingKey {

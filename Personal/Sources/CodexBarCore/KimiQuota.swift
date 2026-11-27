@@ -48,7 +48,7 @@ enum KimiQuota {
 
     private static func window(_ title: String, pool: KimiRatioPool?, count: KimiUsageDetail?) -> QuotaWindow? {
         let counted = self.countWindow(title, count: count)
-        guard let raw = pool?.usedRatio, raw.isFinite, raw >= 0, let ratio = Decimal(string: String(raw))
+        guard let ratio = pool?.usedRatio, !ratio.isNaN, ratio >= 0
         else { return counted }
         let reset = ISO8601DateParser.parse(pool?.resetTime)
         // Both schemas can describe the same reset with timestamps up to two seconds apart.

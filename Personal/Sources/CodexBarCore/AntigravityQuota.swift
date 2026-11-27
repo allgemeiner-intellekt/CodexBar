@@ -4,39 +4,17 @@ import FoundationNetworking
 #endif
 
 enum AntigravityQuota {
-    private struct Project: Decodable {
-        let id: String?
-        let projectId: String?
-    }
-
-    private struct CodeAssist: Decodable {
-        let projectID: String?
-        let rejectedClient: Bool
-
-        enum Keys: String, CodingKey { case cloudaicompanionProject, currentTier, ineligibleTiers }
-        private struct Tier: Decodable { let reasonCode: String? }
-
-        init(from decoder: Decoder) throws {
-            let root = try decoder.container(keyedBy: Keys.self)
-            let project = try? root.decode(Project.self, forKey: .cloudaicompanionProject)
-            self.projectID = (try? root.decode(String.self, forKey: .cloudaicompanionProject))
-                ?? project?.id ?? project?.projectId
-            let reasons = try root.decodeIfPresent([Tier].self, forKey: .ineligibleTiers)
-            let hasTier = root.contains(.currentTier) && (try? root.decodeNil(forKey: .currentTier)) == false
-            self.rejectedClient = !hasTier && self.projectID == nil
-                && reasons?.contains { $0.reasonCode == "GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT" } == true
-        }
-    }
-
     static func fetch(
         _ grant: AntigravityOAuthCredentials,
         http: QuotaHTTP,
         save: @Sendable (AntigravityOAuthCredentials) throws -> Void) async throws -> [QuotaWindow]
     {
+        var credentials = grant
         let token: String
         if let expiry = grant.expiryDate, expiry.timeIntervalSinceNow <= 60 {
             let renewed = try await self.renew(grant, http: http)
             try save(renewed)
+            credentials = renewed
             guard let access = renewed.accessToken else { throw QuotaError.unauthorized }
             token = access
         } else {
@@ -44,38 +22,77 @@ enum AntigravityQuota {
             token = access
         }
 
-        let info = try await self.request(
-            "loadCodeAssist", body: ["metadata": AntigravityRemoteClient.clientMetadata], token: token, http: http)
-        let assist = try JSONDecoder().decode(CodeAssist.self, from: info)
-        guard !assist.rejectedClient else { throw QuotaError.unauthorized }
-        let project = assist.projectID?.trimmedNonEmpty ?? grant.projectID?.trimmedNonEmpty
+        func loadProject() async throws -> AntigravityRemoteClient.CodeAssistResponse {
+            let info = try await self.request(
+                "loadCodeAssist", body: ["metadata": AntigravityRemoteClient.clientMetadata], token: token, http: http)
+            return try JSONDecoder().decode(AntigravityRemoteClient.CodeAssistResponse.self, from: info)
+        }
+        let assist = try await loadProject()
+        let stored = credentials.projectID?.trimmedNonEmpty
+        if stored == nil, assist.rejectsClientForConsumerTier { throw QuotaError.unauthorized }
+        let project = try await AntigravityRemoteClient.projectID(
+            stored: stored,
+            response: assist,
+            onboard: { tier in
+                let result = try await self.request(
+                    "onboardUser",
+                    body: ["tierId": tier, "metadata": AntigravityRemoteClient.clientMetadata],
+                    token: token,
+                    http: http)
+                return try JSONDecoder().decode(AntigravityRemoteClient.OnboardResponse.self, from: result).projectID
+            }, reload: loadProject)
+        if let project, project != stored {
+            credentials.projectID = project
+            try save(credentials)
+        }
         let body = project.map { ["project": $0] } ?? [:]
         do {
             let data = try await self.request("retrieveUserQuotaSummary", body: body, token: token, http: http)
             let windows = try self.summary(data)
             if !windows.isEmpty { return windows }
-        } catch let QuotaError.http(status) where [403, 404, 501].contains(status) {
-            // Earlier accounts expose measured model buckets through retrieveUserQuota.
+        } catch QuotaError.unauthorized {
+            throw QuotaError.unauthorized
+        } catch QuotaError.http(429) {
+            throw QuotaError.http(429)
+        } catch {
+            try Task.checkCancellation()
+            if (error as? URLError)?.code == .cancelled { throw error }
+            // An unavailable or unrecognized summary can still have measured model quotas.
         }
-        let data = try await self.request("retrieveUserQuota", body: body, token: token, http: http)
-        let buckets = try JSONDecoder().decode(ModelQuotas.self, from: data)
-        return (buckets.buckets ?? []).compactMap { bucket in
+        return try await self.modelWindows(project: body, token: token, http: http)
+    }
+
+    private static func modelWindows(project: [String: String], token: String, http: QuotaHTTP) async throws
+        -> [QuotaWindow]
+    {
+        do {
+            let data = try await self.request("fetchAvailableModels", body: project, token: token, http: http)
+            let response = try JSONDecoder().decode(
+                AntigravityRemoteClient.FetchAvailableModelsResponse.self,
+                from: data)
+            let rows = (response.models ?? [:]).sorted { $0.key < $1.key }.compactMap { id, model in
+                self.window(
+                    title: model.displayName?.trimmedNonEmpty ?? model.label?.trimmedNonEmpty ?? id,
+                    remaining: model.quotaInfo?.remainingFraction,
+                    reset: model.quotaInfo?.resetTime)
+            }
+            // Some clients receive a full availability list for every model. Require measured buckets for that shape.
+            if rows.contains(where: { $0.usedPercent > 0 }) { return rows }
+        } catch is DecodingError {
+            // The independent bucket endpoint may still have a usable response.
+        } catch let QuotaError.http(status) where [403, 404, 501].contains(status) {
+            // Older accounts may grant access only to retrieveUserQuota.
+        }
+        let data = try await self.request("retrieveUserQuota", body: project, token: token, http: http)
+        let response = try JSONDecoder().decode(AntigravityRemoteClient.RetrieveUserQuotaResponse.self, from: data)
+        return (response.buckets ?? []).compactMap { bucket in
             guard let model = bucket.modelId?.trimmedNonEmpty else { return nil }
             return self.window(title: model, remaining: bucket.remainingFraction, reset: bucket.resetTime)
         }
     }
 
-    private struct ModelQuotas: Decodable {
-        struct Bucket: Decodable {
-            let modelId: String?
-            let remainingFraction: Double?
-            let resetTime: String?
-        }
-
-        let buckets: [Bucket]?
-    }
-
     private struct Summary: Decodable {
+        let code: CodeValue?
         let response: QuotaSummaryPayload?
         let summary: QuotaSummaryPayload?
         let groups: [QuotaSummaryGroupPayload]?
@@ -83,6 +100,7 @@ enum AntigravityQuota {
 
     static func summary(_ data: Data) throws -> [QuotaWindow] {
         let envelope = try JSONDecoder().decode(Summary.self, from: data)
+        guard envelope.code?.isOK != false else { return [] }
         let groups = envelope.response?.groups ?? envelope.summary?.groups ?? envelope.groups ?? []
         return groups.flatMap { group in
             (group.buckets ?? []).compactMap { bucket -> QuotaWindow? in
@@ -93,13 +111,14 @@ enum AntigravityQuota {
                 let parts = [group.displayName ?? group.name, name, cadence == name ? nil : cadence]
                 return self.window(
                     title: parts.compactMap(\.self).joined(separator: " · "),
-                    remaining: bucket.remainingFraction ?? bucket.remaining?.remainingFraction, reset: bucket.resetTime)
+                    remaining: bucket.remainingFraction ?? bucket.remaining?.remainingFraction,
+                    reset: bucket.resetTime)
             }
         }
     }
 
-    private static func window(title: String, remaining: Double?, reset: String?) -> QuotaWindow? {
-        guard let remaining, (0...1).contains(remaining), let fraction = Decimal(string: String(remaining))
+    private static func window(title: String, remaining: Decimal?, reset: String?) -> QuotaWindow? {
+        guard let fraction = remaining, (0...1).contains(fraction)
         else { return nil }
         let date = ISO8601DateParser.parse(reset) ?? reset.flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
         return QuotaWindow(title: title, usedPercent: (1 - fraction) * 100, resetsAt: date)
