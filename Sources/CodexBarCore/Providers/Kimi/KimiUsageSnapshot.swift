@@ -196,3 +196,14 @@ extension KimiUsageSnapshot {
         return abs(codeReset.timeIntervalSince(weeklyReset)) <= 5 * 60
     }
 }
+
+extension KimiRatioPool {
+    func window(minutes: Int) -> RateWindow? {
+        guard let usedRatio, !usedRatio.isNaN, usedRatio >= 0 else { return nil }
+        return RateWindow(
+            usedPercent: NSDecimalNumber(decimal: min(1, usedRatio) * 100).doubleValue,
+            windowMinutes: minutes,
+            resetsAt: ISO8601DateParser.parse(self.resetTime),
+            resetDescription: nil)
+    }
+}

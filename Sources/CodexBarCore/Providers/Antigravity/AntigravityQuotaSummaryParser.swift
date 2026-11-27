@@ -78,7 +78,8 @@ extension AntigravityStatusProbe {
         return AntigravityQuotaSummaryBucket(
             bucketId: resolvedBucketId,
             displayName: self.nonEmpty(displayName) ?? resolvedBucketId,
-            remainingFraction: payload.remainingFraction ?? payload.remaining?.remainingFraction,
+            remainingFraction: (payload.remainingFraction ?? payload.remaining?.remainingFraction)
+                .map { NSDecimalNumber(decimal: $0).doubleValue },
             resetTime: resetTime,
             resetDescription: payload.description,
             disabled: payload.disabled ?? false,
@@ -122,51 +123,5 @@ struct AntigravityQuotaSummaryResponse: Decodable {
         }
         return try AntigravityStatusProbe.quotaSummarySnapshot(
             payload, accountEmail: accountEmail, accountPlan: accountPlan, source: source)
-    }
-}
-
-private struct QuotaSummaryPayload: Decodable {
-    let description: String?
-    let groups: [QuotaSummaryGroupPayload]?
-}
-
-private struct QuotaSummaryGroupPayload: Decodable {
-    let displayName: String?
-    let name: String?
-    let description: String?
-    let buckets: [QuotaSummaryBucketPayload]?
-}
-
-private struct QuotaSummaryBucketPayload: Decodable {
-    let bucketId: String?
-    let id: String?
-    let displayName: String?
-    let name: String?
-    let description: String?
-    let disabled: Bool?
-    let remainingFraction: Double?
-    let remaining: QuotaSummaryRemainingPayload?
-    let resetTime: String?
-    let window: String?
-}
-
-private struct QuotaSummaryRemainingPayload: Decodable {
-    let remainingFraction: Double?
-
-    private enum CodingKeys: String, CodingKey {
-        case remainingFraction
-        case oneofCase = "case"
-        case value
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let remainingFraction = try container.decodeIfPresent(Double.self, forKey: .remainingFraction) {
-            self.remainingFraction = remainingFraction
-            return
-        }
-        let oneofCase = try container.decodeIfPresent(String.self, forKey: .oneofCase)
-        self.remainingFraction = oneofCase == "remainingFraction"
-            ? try container.decodeIfPresent(Double.self, forKey: .value) : nil
     }
 }

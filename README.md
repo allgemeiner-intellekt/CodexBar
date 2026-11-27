@@ -2,6 +2,8 @@
 
 > Every AI coding limit, in your menu bar.
 
+个人 fork 的 macOS 构建仅查询 Codex、Kimi 和 Antigravity 的订阅额度。连接方式见[个人版说明](Personal/README.md)。
+
 [![Latest release](https://img.shields.io/github/v/release/steipete/CodexBar?style=flat-square&color=0a0a0c)](https://github.com/steipete/CodexBar/releases/latest)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-0a0a0c?style=flat-square)](https://github.com/steipete/CodexBar/releases/latest)
 [![Linux desktop](https://img.shields.io/badge/Linux-Qt_6-1793d1?style=flat-square)](Integrations/Linux/README.md)

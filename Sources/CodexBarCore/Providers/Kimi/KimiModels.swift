@@ -68,21 +68,12 @@ struct KimiCodeUsagePools: Codable, Sendable {
 }
 
 struct KimiRatioPool: Codable, Sendable {
-    let usedRatio: Double?
+    let usedRatio: Decimal?
     let resetTime: String?
 
     private enum CodingKeys: String, CodingKey {
         case usedRatio = "used_ratio"
         case resetTime = "reset_time"
-    }
-
-    func window(minutes: Int) -> RateWindow? {
-        guard let usedRatio, usedRatio.isFinite, usedRatio >= 0 else { return nil }
-        return RateWindow(
-            usedPercent: min(1, usedRatio) * 100,
-            windowMinutes: minutes,
-            resetsAt: ISO8601DateParser.parse(self.resetTime),
-            resetDescription: nil)
     }
 }
 
